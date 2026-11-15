@@ -28,7 +28,7 @@ A **research study with an interactive report.** It isn't a product to deploy in
 | ID | Hypothesis | How it's measured |
 |---|---|---|
 | H1 | A JEV-style model is **strong from the start** (zero-shot) where RL starts near random. | Score at 0 training decisions, Kev vs PPO. |
-| H2 | A JEV-style model **improves more slowly** with training, and RL eventually catches up or overtakes. | **Sample efficiency**: decisions needed to reach 50/80/90% of optimal; gain per 10× more experience; the crossover point in decisions consumed. |
+| H2 | A JEV-style model **improves more slowly** with training, and RL eventually catches up or overtakes. | **Sample efficiency**: decisions needed to reach 80/90/95% of optimal; gain per 10× more experience; the crossover point in decisions consumed. |
 | H3 | A JEV-style model is **good at one-shot decisions, weaker at long-horizon (multi-step) ones**. | Kev's gap to optimal as the horizon grows from 1 to 4 to 12. |
 | H4 | Calibrated confidence lets a JEV-style model **hand off safely**: it is confident on decidable calls and unsure on judgement calls. | Automation rate at a 5% error budget; split by decidable vs judgement. |
 | H5 | **Context without fine-tuning** (rules and worked examples in the prompt) recovers part of the fine-tuning gain for free. | In-context arm vs zero-shot and RL-fine-tuned. |
@@ -39,17 +39,18 @@ A **research study with an interactive report.** It isn't a product to deploy in
 
 One product, H weekly periods (**the horizon dial: H ∈ {1, 4, 12}**). Each week the planner reads the week's notes, sees inventory and recent sales, and orders stock.
 
-- **Hidden truth:** a demand regime `z ∈ {low, normal, surge}` with mean weekly demand {6, 10, 16}. It persists week to week (stay probability 0.85) and is never shown.
-- **Demand:** Poisson around the regime mean, capped at 30. Unmet demand is lost.
-- **Signals:** most weeks bring a note. Each note comes from a source with known reliability (rumour 0.60, sales rep 0.75, confirmed customer order 0.90) and claims "down / flat / up" (that is, low / normal / surge). Some notes are irrelevant distractors. An open LLM writes the note text from those hidden attributes, so the words vary but the information content is exactly known.
-- **Decision:** order quantity, one of {0, 5, 10, 15, 20, 30, 40}. Arrives before the week's demand.
-- **Economics:** price 10, unit cost 4, holding 1 per unit carried, a stockout penalty of 3 per unit of lost sale, a **fixed order cost of 20** (which rewards batching and so creates real multi-step tradeoffs), and salvage 1 per unit left at the end.
+- **Hidden truth:** a demand regime `z ∈ {low, normal, surge}` with mean weekly demand {3, 10, 24}. It shifts often (stay probability 0.5), so last week's sales are a weak guide, and it is never shown.
+- **Demand:** Poisson around the regime mean, capped at 40. Unmet demand is lost.
+- **Signals:** most weeks bring a note. Each note comes from a source with known reliability (rumour 0.65, sales rep 0.80, confirmed customer order 0.95) and claims "down / flat / up" (that is, low / normal / surge). Some notes are irrelevant distractors. An open LLM writes the note text from those hidden attributes, so the words vary but the information content is exactly known.
+- **Decision:** order quantity, one of {0, 5, 10, 15, 20, 25, 30, 40}. Arrives before the week's demand. Stock starts at 0.
+- **Economics:** price 14, unit cost 5, holding 4 per unit carried, a stockout penalty of 10 per unit of lost sale, a **fixed order cost of 10** (which rewards batching and so creates real multi-step tradeoffs), and no salvage value at the end.
 
 **Why this design (decisions, with reasoning):**
 - **One environment with a horizon dial**, not separate tasks for one-shot and multi-step, so H3 is a controlled comparison. Only the horizon changes.
 - **Synthetic but ground-truthed.** Because we know every note's true reliability, we can compute the **Bayes-optimal planner** exactly. "% of optimal" then has a real denominator, and calibration is measured against truth, not against a labeller.
 - **Small enough to solve exactly:** a belief grid times inventory times actions, solved by dynamic programming in numpy. Real planning is bigger. Being solvable is what makes the measurements trustworthy, and that's the trade we're making.
 - **Fixed order cost and inventory carry-over** make H > 1 a genuine planning problem (when to batch, how much to carry, end-of-horizon run-down), not H independent one-shot calls.
+- **Tuned so that reading the inbox matters.** The first world (persistent regimes, mild costs) let the numbers-only base-stock tool reach 99% of the Bayes optimum at H=1: there was nothing left for a reader to win, and the study would have been moot. The tuned world (regimes that shift, sharper costs, more reliable sources) leaves base-stock at 76–90% of optimal and makes only 23–50% of its orders acceptable, while perfect information is worth 1.6–3.7× the Bayes return. About half of all decisions are decidable.
 - **Notes written by an open model from a different family** (Phi-4-mini) than the model under test (Qwen-based Kev), so the text style doesn't favour the tested model. Paraphrases are split into train and test, so evaluation uses wording the agent never trained on.
 
 ### Decidable vs judgement, made precise
@@ -83,9 +84,10 @@ For each decision we compute the Bayes posterior over regimes. A decision is **d
 | Metric | Definition | Serves |
 |---|---|---|
 | **% of optimal** (headline) | `100 × (R − R_random) / (R_bayes − R_random)` on a fixed held-out set of 300 scenarios per horizon, with bootstrap 95% CI | H1–H3, H5 |
+| **Inbox value captured** (planner scale) | `100 × (R − R_basestock) / (R_bayes − R_basestock)`: 0 = the numbers-only tool, 100 = reading every note perfectly. It answers "did reading the inbox beat my current tool?", which the random-anchored scale hides because any sane policy scores high on it | Planner framing, F6 |
 | % of perfect information | Same, with `oracle` in the denominator | Context |
 | Learning curve | % of optimal vs **decisions consumed** (log x), plus GPU-hours | H1, H2 |
-| **Sample efficiency** | (a) **decisions-to-threshold**: training decisions until the eval score first reaches 50 / 80 / 90% of optimal, interpolated on log-decisions (∞ if never reached); (b) **learning rate**: score gained per 10× more decisions, the slope of the curve in log space; (c) **area under the learning curve** over log-decisions, normalised to [0, 1], one number for "good early *and* improving"; (d) **crossover**: the decision count where the PPO curve passes the Kev curve (if it does). Every value comes with a seed spread | H1, H2: the only direct test of "starts strong, trains slower" |
+| **Sample efficiency** | (a) **decisions-to-threshold**: training decisions until the eval score first reaches 80 / 90 / 95% of optimal (base-stock already sits at 76–90%, so lower thresholds say nothing), interpolated on log-decisions (∞ if never reached); (b) **learning rate**: score gained per 10× more decisions, the slope of the curve in log space; (c) **area under the learning curve** over log-decisions, normalised to [0, 1], one number for "good early *and* improving"; (d) **crossover**: the decision count where the PPO curve passes the Kev curve (if it does). Every value comes with a seed spread | H1, H2: the only direct test of "starts strong, trains slower" |
 | **Calibration** | ECE and Brier for (a) "is my chosen action acceptable?" (within 2% of Bayes value) and (b) the regime question vs the Bayes posterior and the truth | H4 |
 | **Automation @ 5% error** | Largest share of decisions the agent can take, ordered by confidence, with ≤ 5% unacceptable. Split by decidable vs judgement | H4 (the planner's question) |
 | **Cost & latency** | ms per decision (p50/p95), GPU-hours to train, $ at a stated H100 rate, $ per 1k decisions served | Practitioner tradeoff |
