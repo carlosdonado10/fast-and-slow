@@ -60,8 +60,12 @@ class KevConfig(BaseModel):
     fake: bool = False  # smoke profile: a deterministic stand-in with the same interface
     dtype: Literal["bf16", "fp32"] = "bf16"
     icl_examples: int = 4
-    # RL (PPO on the pointer-head policy)
-    rl_updates: int = 120
+    # RL (PPO on the pointer-head policy). Budgeted for ~100 Colab compute units: run `fns plan` after `fns kev-check`.
+    rl_horizons: tuple[int, ...] = (
+        1,
+        12,
+    )  # the two ends of the dial; zero-shot / in-context still run at every horizon
+    rl_updates: int = 60
     rl_group_size: int = 8  # rollouts per scenario seed (shared exogenous randomness)
     rl_groups_per_update: int = 4
     rl_epochs: int = 2
@@ -71,12 +75,13 @@ class KevConfig(BaseModel):
     rl_clip: float = 0.2
     rl_entropy: float = 0.01
     rl_reward_scale: float = 0.01
-    eval_every_updates: int = 10
-    checkpoint_every_updates: int = 5  # ~5-10 min of H100 time between checkpoints
+    eval_every_updates: int = 6
+    checkpoint_every_updates: int = 3  # a few minutes of GPU time between checkpoints
 
 
 class ClassicRLConfig(BaseModel):
     variants: tuple[str, ...] = ("num", "emb", "sig")
+    seeds: tuple[int, ...] = (0, 1, 2)  # PPO runs on a laptop CPU for free, so it gets more seeds than Kev
     total_decisions: int = 300_000
     n_envs: int = 8
     eval_points: int = 12  # log-spaced checkpoints along training
@@ -87,19 +92,22 @@ class ClassicRLConfig(BaseModel):
 
 class EvalConfig(BaseModel):
     horizons: tuple[int, ...] = (1, 4, 12)
-    scenarios_per_horizon: int = 300
-    curve_scenarios: int = 120  # held-out subset scored at every learning-curve checkpoint (the final eval uses all)
+    scenarios_per_horizon: int = 200
+    curve_scenarios: int = 64  # held-out subset scored at every learning-curve checkpoint (the final eval uses all)
     eval_seed: int = 10_000  # held-out scenario seeds start here; training seeds stay below
     bootstrap: int = 1000
     error_budget: float = 0.05
     efficiency_thresholds: tuple[float, ...] = (80.0, 90.0, 95.0)  # % of optimal, for decisions-to-threshold
     replay_scenarios: int = 3
     h100_usd_per_hour: float = 3.0
+    # Colab bills compute units (CU). Check the rate for your GPU in Colab's resources panel; ~15/h is an H100 guess.
+    cu_per_hour: float = 15.0
+    budget_cu: float = 100.0
 
 
 class StudyConfig(BaseModel):
     profile: str = "smoke"
-    seeds: tuple[int, ...] = (0,)
+    seeds: tuple[int, ...] = (0,)  # Kev RL seeds (GPU, the expensive arm)
     runs_dir: Path = Path("runs")
     world: WorldConfig = Field(default_factory=WorldConfig)
     oracle: OracleConfig = Field(default_factory=OracleConfig)
@@ -115,9 +123,15 @@ def smoke() -> StudyConfig:
         seeds=(0,),
         notes=NotesConfig(writer="templates", per_cell=12),
         kev=KevConfig(
-            fake=True, rl_updates=4, rl_group_size=4, rl_groups_per_update=2, rl_minibatch=8, eval_every_updates=2
+            fake=True,
+            rl_horizons=(1, 4),
+            rl_updates=4,
+            rl_group_size=4,
+            rl_groups_per_update=2,
+            rl_minibatch=8,
+            eval_every_updates=2,
         ),
-        classic=ClassicRLConfig(total_decisions=6_000, n_envs=4, eval_points=4, variants=("num", "sig")),
+        classic=ClassicRLConfig(total_decisions=6_000, n_envs=4, eval_points=4, variants=("num", "sig"), seeds=(0,)),
         eval=EvalConfig(
             horizons=(1, 4), scenarios_per_horizon=24, curve_scenarios=12, bootstrap=200, replay_scenarios=2
         ),
@@ -125,7 +139,7 @@ def smoke() -> StudyConfig:
 
 
 def full() -> StudyConfig:
-    return StudyConfig(profile="full", seeds=(0, 1), notes=NotesConfig(writer="llm"))
+    return StudyConfig(profile="full", seeds=(0,), notes=NotesConfig(writer="llm"))
 
 
 PROFILES = {"smoke": smoke, "full": full}

@@ -51,6 +51,7 @@ class Step:
 class RLLog:
     points: list[dict[str, float]] = field(default_factory=list)  # decisions, score, seconds
     updates: list[dict[str, float]] = field(default_factory=list)  # loss, entropy, mean return, clip fraction
+    paused: bool = False  # stopped at a checkpoint because the session's time budget ran out
 
 
 class KevRLTrainer:
@@ -192,7 +193,9 @@ class KevRLTrainer:
         evaluate: EvalFn,
         on_point: Callable[[RLLog], None] | None = None,
         checkpoint: Path | None = None,
+        deadline: float | None = None,
     ) -> RLLog:
+        """deadline: a time.monotonic() value. When an update finishes past it, save a checkpoint and stop (paused)."""
         resumed = self.load_checkpoint(checkpoint) if checkpoint else None
         if resumed:
             start, log = resumed
@@ -216,6 +219,10 @@ class KevRLTrainer:
                 )
                 if on_point:
                     on_point(log)
-            if checkpoint and (u % self.cfg.checkpoint_every_updates == 0 or u == self.cfg.rl_updates):
+            out_of_time = deadline is not None and time.monotonic() >= deadline and u < self.cfg.rl_updates
+            if checkpoint and (u % self.cfg.checkpoint_every_updates == 0 or u == self.cfg.rl_updates or out_of_time):
                 self.save_checkpoint(checkpoint, u, log)
+            if out_of_time:
+                log.paused = True
+                break
         return log

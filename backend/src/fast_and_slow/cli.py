@@ -11,7 +11,9 @@ fns all        --profile smoke         # everything, in order (laptop smoke test
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -59,10 +61,12 @@ def kev_rl(
     runs: Path = Runs,
     horizon: int = typer.Option(..., "--horizon"),
     seed: int = typer.Option(0, "--seed"),
+    max_minutes: float = typer.Option(0, "--max-minutes", help="pause at a checkpoint after this long (0 = no limit)"),
     force: bool = Force,
 ) -> None:
-    """RL fine-tune Kev (LoRA + PPO on the decision head) for one horizon and seed."""
-    _study(profile, runs).kev_rl(horizon, seed, force)
+    """RL fine-tune Kev (LoRA + PPO on the decision head) for one horizon and seed. Resumes from its checkpoint."""
+    finished = _study(profile, runs).kev_rl(horizon, seed, force, max_minutes or None)
+    typer.echo("finished" if finished else "paused at a checkpoint: run the same command to continue")
 
 
 @app.command()
@@ -76,6 +80,16 @@ def ppo(
 ) -> None:
     """Train and evaluate one classic PPO run."""
     _study(profile, runs).ppo(variant, horizon, seed, force)
+
+
+@app.command("ppo-all")
+def ppo_all(profile: str = Profile, runs: Path = Runs, force: bool = Force) -> None:
+    """Every PPO run in the plan. CPU only: meant for a laptop, so it costs no Colab units."""
+    s = _study(profile, runs)
+    todo = s.ppo_runs()
+    for i, (v, h, seed) in enumerate(todo, 1):
+        typer.echo(f"[{i}/{len(todo)}] ppo_{v} H{h} seed{seed}")
+        s.ppo(v, h, seed, force)
 
 
 @app.command()
@@ -101,11 +115,10 @@ def run_all(
     s.references(force)
     s.kev_static("kev_zero", force)
     s.kev_static("kev_icl", force)
-    for h in s.cfg.eval.horizons:
-        for seed in s.cfg.seeds:
-            s.kev_rl(h, seed, force)
-            for v in s.cfg.classic.variants:
-                s.ppo(v, h, seed, force)
+    for h, seed in s.kev_rl_runs():
+        s.kev_rl(h, seed, force)
+    for v, h, seed in s.ppo_runs():
+        s.ppo(v, h, seed, force)
     typer.echo(export_report(s, out))
 
 
@@ -118,11 +131,12 @@ def status(profile: str = Profile, runs: Path = Runs) -> None:
     rows += [(f"refs H{h}", s.root / "refs" / f"H{h}.json") for h in c.eval.horizons]
     for arm in ("kev_zero", "kev_icl"):
         rows += [(f"{arm} H{h}", s.root / "evals" / arm / f"H{h}" / "seed0.json") for h in c.eval.horizons]
-    for h in c.eval.horizons:
-        for seed in c.seeds:
-            rows.append((f"kev_rl H{h} seed{seed}", s.root / "evals" / "kev_rl" / f"H{h}" / f"seed{seed}.json"))
-            for v in c.classic.variants:
-                rows.append((f"ppo_{v} H{h} seed{seed}", s.root / "evals" / f"ppo_{v}" / f"H{h}" / f"seed{seed}.json"))
+    for h, seed in s.kev_rl_runs():
+        ck = s.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}" / "trainer.json"
+        tag = f"  (checkpoint at update {json.loads(ck.read_text())['update']})" if ck.exists() else ""
+        rows.append((f"kev_rl H{h} seed{seed}{tag}", s.root / "evals" / "kev_rl" / f"H{h}" / f"seed{seed}.json"))
+    for v, h, seed in s.ppo_runs():
+        rows.append((f"ppo_{v} H{h} seed{seed}", s.root / "evals" / f"ppo_{v}" / f"H{h}" / f"seed{seed}.json"))
     done = sum(p.exists() for _, p in rows)
     for name, p in rows:
         typer.echo(f"{'done' if p.exists() else '    '}  {name}")
@@ -130,12 +144,13 @@ def status(profile: str = Profile, runs: Path = Runs) -> None:
 
 
 @app.command("kev-check")
-def kev_check(profile: str = Profile, runs: Path = Runs) -> None:
-    """One-minute preflight before hours of GPU time: load Kev, score a request, take one gradient step."""
+def kev_check(profile: str = Profile, runs: Path = Runs, batch: int = typer.Option(16, "--batch")) -> None:
+    """Preflight on the GPU: load Kev, check gradients reach the adapter, and measure real speed for `fns plan`."""
     import time
 
     import torch
 
+    from .plan import Speed
     from .sim.desk import Episode
     from .sim.render import ORDER_Q, request
     from .sim.world import sample_scenario
@@ -145,21 +160,60 @@ def kev_check(profile: str = Profile, runs: Path = Runs) -> None:
     t0 = time.perf_counter()
     pol = s.policy(fresh=True)
     typer.echo(f"loaded {pol.name} in {time.perf_counter() - t0:.1f}s")
-    sc = sample_scenario(w, 4, 1)
-    req = request(w, Episode(w, sc, s.bank.texts(sc, "test")).observe())
-    t0 = time.perf_counter()
-    out = pol.score([req])[0]
-    probs = torch.softmax(out[ORDER_Q].float(), -1)
-    typer.echo(
-        f"scored in {(time.perf_counter() - t0) * 1000:.0f} ms; order probs {[round(float(p), 3) for p in probs]}"
-    )
-    z = pol.score([req], grad=True)[0][ORDER_Q]
-    loss = -torch.log_softmax(z.float(), -1)[0]
-    loss.backward()  # type: ignore[no-untyped-call]
+    reqs = []
+    for i in range(batch):
+        sc = sample_scenario(w, 12, 100 + i)
+        ep = Episode(w, sc, s.bank.texts(sc, "test"))
+        for _ in range(i % 12):
+            ep.step(10)
+        reqs.append(request(w, ep.observe()))
+    order_only = [{**r, "questions": {ORDER_Q: r["questions"][ORDER_Q]}} for r in reqs]
+
+    def timed(fn: Callable[[], object], repeat: int = 2) -> float:
+        fn()  # warm-up (kernels, caches)
+        t = time.perf_counter()
+        for _ in range(repeat):
+            fn()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        return (time.perf_counter() - t) / repeat / len(reqs)
+
+    both = timed(lambda: pol.score(reqs))
+    order = timed(lambda: pol.score(order_only))
+
+    def step() -> None:
+        zs = pol.score(order_only, grad=True)
+        loss = torch.stack([-torch.log_softmax(z[ORDER_Q].float(), -1)[0] for z in zs]).mean()
+        loss.backward()  # type: ignore[no-untyped-call]
+
+    train = timed(step)
     grads = sum(p.grad is not None for g in pol.param_groups() for p in g["params"])
     if not grads:
+        typer.echo("no gradient reached the trainable weights: RL cannot run")
         raise typer.Exit(code=1)
+    gpu = torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu"
+    speed = Speed(order, both, train, gpu)
+    speed.save(s.root / "speed.json")
     typer.echo(f"gradient reached {grads} trainable tensors: RL can run")
+    typer.echo(
+        f"per request: order {order * 1000:.0f} ms, order+regime {both * 1000:.0f} ms, "
+        f"train step {train * 1000:.0f} ms  ({gpu}) -> saved for `fns plan`"
+    )
+
+
+@app.command()
+def plan(
+    profile: str = Profile,
+    runs: Path = Runs,
+    cu_per_hour: float = typer.Option(0, "--cu-per-hour", help="your GPU's rate from Colab's resources panel"),
+    budget: float = typer.Option(0, "--budget", help="compute units you're willing to spend"),
+) -> None:
+    """Estimated GPU hours and Colab compute units per stage, from kev-check's measured speed."""
+    from .plan import Speed, render
+
+    s = _study(profile, runs)
+    e = s.cfg.eval
+    typer.echo(render(s.cfg, Speed.load(s.root / "speed.json"), cu_per_hour or e.cu_per_hour, budget or e.budget_cu))
 
 
 if __name__ == "__main__":  # pragma: no cover

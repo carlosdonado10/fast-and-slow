@@ -96,17 +96,27 @@ Every hypothesis gets a verdict that the export step computes from these numbers
 
 ---
 
-## 5. Budget (about 25 H100-hours)
+## 5. Budget (~100 Colab compute units)
 
-| Stage | Where | Estimate |
+The first plan assumed about 25 H100-hours. Colab bills in compute units (CU), and an H100 costs about 15 CU an hour, so 100 CU buys roughly 6–7 H100-hours. **Decision: spend the GPU only where the question needs it, and price everything before spending.**
+
+| Stage | Where | Plan |
 |---|---|---|
-| Note bank (Phi-4-mini, about 900 notes) | GPU | ~0.2 h |
-| Kev zero-shot + in-context evals, 3 horizons | GPU | ~0.5 h |
-| Kev RL: 3 horizons × 2 seeds, eval at checkpoints | GPU | ~18 h |
-| Classic PPO: 3 variants × 3 horizons × 3 seeds | CPU (Colab) | ~4 h of CPU, no GPU |
+| Note bank (Phi-4-mini, ~600 notes) | GPU | once, ~10 min |
+| Kev zero-shot + in-context | GPU | every horizon (1, 4, 12); cheap, no training |
+| Kev RL | GPU | **H=1 and H=12 only, one seed**, 60 updates. The two ends of the dial are enough for H2's learning-speed question and H3's interaction with horizon |
+| Classic PPO | **laptop CPU, 0 CU** | 3 variants × 3 horizons × **3 seeds** (it's free, so it gets the seeds) |
 | Bayes and oracle DP | CPU | minutes |
 
-The config has a `smoke` profile (runs on a laptop in minutes, with a fake Kev) and a `full` profile (Colab H100). Every stage is resumable and writes to `runs/`, and the notebook can sync `runs/` to Google Drive.
+**How spend is controlled:**
+- `fns kev-check` measures Kev's real speed on the GPU you were given.
+- `fns plan` prices each stage in hours and CU against the budget. When the plan is over budget, it says how many RL updates fit.
+- `fns kev-rl --max-minutes` pauses at a checkpoint, so each session's spend has a cap.
+- With guessed speeds, the lean plan comes to about 28 CU, leaving room to add H=4 RL or a second seed once the real speed is known.
+
+**What we give up:** a single Kev RL seed means no seed spread for Kev+RL, so H2's verdict carries that caveat in the report. RL at H=4 is also dropped unless the measured speed leaves room for it.
+
+The config has a `smoke` profile (runs on a laptop in seconds, with a fake Kev) and a `full` profile (Colab). Every stage is resumable and checkpointed to Google Drive.
 
 ---
 

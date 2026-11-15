@@ -180,10 +180,11 @@ class Study:
                 },
             )
 
-    def kev_rl(self, h: int, seed: int, force: bool = False) -> None:
+    def kev_rl(self, h: int, seed: int, force: bool = False, max_minutes: float | None = None) -> bool:
+        """Returns True when the run is finished, False when it paused at a checkpoint (time budget reached)."""
         p = self.path("evals", "kev_rl", f"H{h}", f"seed{seed}.json")
         if p.exists() and not force:
-            return
+            return True
         w = self.cfg.world
         policy = self.policy(fresh=True)  # every run starts from the released weights
         scorer = self.curve_scorer(h)
@@ -199,12 +200,20 @@ class Study:
             evaluate_policy,
             on_point=lambda lg: self._write(curve_path, {"points": lg.points, "updates": lg.updates}),
             checkpoint=self.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}",
+            deadline=time.monotonic() + max_minutes * 60 if max_minutes else None,
         )
+        if rl_log.paused:
+            log.info(
+                "kev_rl H%s seed%s paused at %s decisions; run the same command to continue", h, seed, trainer.decisions
+            )
+            self._policy = None
+            return False
         self._write(curve_path, {"points": rl_log.points, "updates": rl_log.updates, "train_seconds": trainer.seconds})
         policy.save(self.root / "weights" / "kev_rl" / f"H{h}" / f"seed{seed}")
         res = evaluate(KevAgent("kev_rl", w, policy), w, self.bank, self.scenarios(h), self.labeller(h))
         self._write(p, res.to_json())
         self._policy = None  # the next arm reloads clean weights
+        return True
 
     def ppo(self, variant: str, h: int, seed: int, force: bool = False) -> None:
         from .agents.classic_rl import PPOAgent, train_ppo
@@ -241,3 +250,11 @@ class Study:
     def arms_present(self) -> list[str]:
         d = self.root / "evals"
         return sorted(x.name for x in d.iterdir()) if d.exists() else []
+
+    # ------------------------------------------------------------ the run matrix
+    def kev_rl_runs(self) -> list[tuple[int, int]]:
+        return [(h, s) for s in self.cfg.seeds for h in self.cfg.kev.rl_horizons]
+
+    def ppo_runs(self) -> list[tuple[str, int, int]]:
+        c = self.cfg.classic
+        return [(v, h, s) for s in c.seeds for h in self.cfg.eval.horizons for v in c.variants]
