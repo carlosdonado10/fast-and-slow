@@ -1,0 +1,15 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# study outputs (synced to Drive from Colab, not committed)
+runs/
+# frontend
+node_modules/
+frontend/dist/
+.DS_Store
+.coverage
+coverage.xml
+htmlcov/

@@ -1,0 +1,80 @@
+# Run `uv run --directory backend pre-commit install` once (installs the git hook for the whole repo).
+# Python tools run through uv so their versions come from backend/uv.lock, the same ones CI and Colab use.
+default_install_hook_types: [pre-commit]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=500, --enforce-all]
+      - id: detect-private-key
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^frontend/tsconfig.*\.json$  # tsconfig allows comments
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: (uv\.lock|pnpm-lock\.yaml)$
+
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.8.1
+    hooks:
+      - id: nbstripout  # never commit notebook outputs (tokens, paths, large blobs)
+
+  - repo: local
+    hooks:
+      - id: forbid-env-files
+        name: forbid .env files (use .env.example)
+        language: fail
+        entry: ".env files hold secrets and must not be committed; commit a .env.example instead"
+        files: (^|/)\.env(\.(?!example$)[^/]+)?$
+
+      - id: forbid-model-weights
+        name: forbid model weights and run outputs
+        language: fail
+        entry: "weights, checkpoints and run outputs live in runs/ or Google Drive, not git"
+        files: \.(safetensors|bin|pt|pth|ckpt|gguf|onnx|npz|parquet)$|(^|/)runs/
+
+      - id: black
+        name: black
+        language: system
+        entry: uv run --directory backend black --config pyproject.toml
+        types: [python]
+        files: ^backend/
+        pass_filenames: false
+        args: [src, tests]
+
+      - id: ruff
+        name: ruff
+        language: system
+        entry: uv run --directory backend ruff check --fix src tests
+        types: [python]
+        files: ^backend/
+        pass_filenames: false
+
+      - id: mypy
+        name: mypy
+        language: system
+        entry: uv run --directory backend mypy src
+        types: [python]
+        files: ^backend/
+        pass_filenames: false
+
+      - id: pytest-coverage
+        name: pytest (coverage >= 80%)
+        language: system
+        entry: uv run --directory backend pytest -q --cov --cov-fail-under=80
+        types: [python]
+        files: ^backend/
+        pass_filenames: false

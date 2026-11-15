@@ -1,0 +1,96 @@
+[project]
+name = "fast-and-slow"
+version = "0.1.0"
+description = "System One decision models (JEV-style, via Kev) vs classic RL on a planner's replenishment desk."
+readme = "README.md"
+authors = [
+    { name = "Carlos Donado", email = "cf.donado@hotmail.com" }
+]
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "gymnasium>=1.0",
+    "stable-baselines3>=2.4",
+    "torch>=2.6,<2.9",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Everything that needs a GPU box (Colab H100): Kev, the note writer, the text embedder.
+gpu = [
+    "kev @ git+https://github.com/jaredpalmer/kev@kev-1.0",
+    "transformers>=5.17,<6",
+    "accelerate>=1.0",
+    "peft>=0.21",
+    "sentence-transformers>=3.0",
+]
+
+[project.scripts]
+fns = "fast_and_slow.cli:app"
+
+[dependency-groups]
+dev = [
+    "black>=26.10.1",
+    "detect-secrets>=1.5.0",
+    "mypy>=2.4.1",
+    "pre-commit>=4.7.0",
+    "pytest>=8.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.8",
+    "scipy-stubs>=1.18.1.1",
+    "types-pyyaml>=6.0.12.20261113",
+    "types-tqdm>=4.70.0.20261106",
+]
+
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# black owns formatting; ruff owns correctness, imports and modernisation
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]  # line length is black's call; unicode (×, −, ≥) is intentional in prose
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_return_any = false  # numpy's stubs return Any from most reductions; flagging each is noise
+plugins = ["pydantic.mypy"]
+# libraries without type information, used only behind narrow adapters
+[[tool.mypy.overrides]]
+module = ["kev.*", "stable_baselines3.*", "gymnasium.*", "transformers.*", "sentence_transformers.*", "peft.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
+
+[tool.coverage.run]
+source = ["fast_and_slow"]
+branch = true
+# GPU-only shims: they load model weights onto CUDA and can't run on a laptop or in CI. Each is a thin adapter;
+# the logic it feeds (request building, PPO, scoring, metrics) is tested through the fake-model path.
+omit = [
+    "*/fast_and_slow/notes/llm_writer.py",
+    "*/fast_and_slow/agents/kev_backend.py",
+    "*/fast_and_slow/agents/embedder_gpu.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
