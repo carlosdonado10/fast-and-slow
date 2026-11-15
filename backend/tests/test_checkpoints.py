@@ -1,0 +1,53 @@
+"""A dropped Colab session must cost minutes, not hours: runs resume from their last checkpoint."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+
+from fast_and_slow.agents.classic_rl import train_ppo
+from fast_and_slow.agents.kev_rl import KevRLTrainer
+from fast_and_slow.agents.policy import FakePolicy
+from fast_and_slow.config import StudyConfig
+from fast_and_slow.notes.bank import NoteBank
+
+
+def _trainer(cfg: StudyConfig, bank: NoteBank, updates: int) -> KevRLTrainer:
+    k = cfg.kev.model_copy(update={"rl_updates": updates, "checkpoint_every_updates": 1, "eval_every_updates": 2})
+    return KevRLTrainer(cfg.world, bank, 2, FakePolicy(seed=5), k, seed=9)
+
+
+def test_interrupted_kev_rl_resumes_to_the_same_weights(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
+    straight = _trainer(cfg, bank, 4)
+    straight.train(lambda p: 0.0)
+
+    ckpt = tmp_path / "ckpt"
+    first = _trainer(cfg, bank, 2)  # the session dies after update 2
+    first.train(lambda p: 0.0, checkpoint=ckpt)
+    assert (ckpt / "trainer.json").exists()
+    assert not ckpt.with_name("ckpt.tmp").exists() and not ckpt.with_name("ckpt.old").exists()
+
+    resumed = _trainer(cfg, bank, 4)  # a new session, same command
+    log = resumed.train(lambda p: 0.0, checkpoint=ckpt)
+    assert resumed.decisions == straight.decisions
+    assert torch.equal(resumed.policy.state_proj, straight.policy.state_proj)  # type: ignore[attr-defined]
+    assert any(u.get("event", "").startswith("resumed from update 2") for u in log.updates)  # type: ignore[attr-defined]
+    assert [p["decisions"] for p in log.points] == [0, straight.decisions // 2, straight.decisions]
+
+
+def test_a_missing_checkpoint_starts_fresh(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
+    t = _trainer(cfg, bank, 1)
+    assert t.load_checkpoint(tmp_path / "nothing") is None
+
+
+def test_interrupted_ppo_continues_its_curve(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
+    ckpt = tmp_path / "ppo"
+    w = cfg.world
+    _, first = train_ppo(w, bank, 2, "num", None, 600, 2, 3, lambda a: 1.0, checkpoint=ckpt, save_every=200)
+    assert (ckpt / "model.zip").exists() and (ckpt / "curve.json").exists()
+    model, curve = train_ppo(w, bank, 2, "num", None, 1_200, 2, 3, lambda a: 2.0, checkpoint=ckpt, save_every=200)
+    assert curve[: len(first)] == first  # history kept, not re-evaluated
+    assert curve[-1]["score"] == 2.0 and model.num_timesteps >= 1_200
+    assert [p["decisions"] for p in curve] == sorted(p["decisions"] for p in curve)
+    assert curve[-1]["seconds"] >= first[-1]["seconds"]

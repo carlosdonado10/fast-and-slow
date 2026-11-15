@@ -16,9 +16,12 @@ The trainer is policy-agnostic: the same code trains Kev on an H100 and the fake
 
 from __future__ import annotations
 
+import json
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -91,7 +94,8 @@ class KevRLTrainer:
             logits = self.policy.score(reqs)
             for i, req, z in zip(live, reqs, logits, strict=True):
                 logp = torch.log_softmax(z[ORDER_Q].float(), -1)
-                a = int(torch.multinomial(logp.exp(), 1, generator=None).item())
+                p = logp.exp().double().cpu().numpy()
+                a = int(self.rng.choice(len(p), p=p / p.sum()))  # numpy RNG only: its state is checkpointed
                 week = eps[i].week
                 out = eps[i].step(self.w.order_menu[a])
                 steps[i].append(Step(req, a, float(logp[a]), out.reward * self.cfg.rl_reward_scale, group[i], week))
@@ -149,13 +153,57 @@ class KevRLTrainer:
                 clips.append(float(((ratio.detach() - 1).abs() > cfg.rl_clip).float().mean()))
         return {"loss": float(np.mean(losses)), "entropy": float(np.mean(ents)), "clip_frac": float(np.mean(clips))}
 
+    # ------------------------------------------------------------ checkpoints
+    def save_checkpoint(self, path: Path, update: int, log: RLLog) -> None:
+        """Everything needed to continue exactly where we stopped. Written to a temp dir, then swapped in, so a
+        disconnect mid-write never leaves a half checkpoint behind."""
+        tmp, old = path.with_name(path.name + ".tmp"), path.with_name(path.name + ".old")
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        self.policy.save(tmp / "policy")
+        torch.save({"opt": self.opt.state_dict()}, tmp / "optimizer.pt")
+        state = {
+            "update": update,
+            "decisions": self.decisions,
+            "seconds": self.seconds,
+            "rng": self.rng.bit_generator.state,
+            "log": {"points": log.points, "updates": log.updates},
+        }
+        (tmp / "trainer.json").write_text(json.dumps(state))
+        if path.exists():
+            shutil.rmtree(old, ignore_errors=True)
+            path.rename(old)
+        tmp.rename(path)
+        shutil.rmtree(old, ignore_errors=True)
+
+    def load_checkpoint(self, path: Path) -> tuple[int, RLLog] | None:
+        if not (path / "trainer.json").exists():
+            return None
+        state = json.loads((path / "trainer.json").read_text())
+        self.policy.load(path / "policy")
+        self.opt.load_state_dict(torch.load(path / "optimizer.pt", weights_only=False)["opt"])
+        self.rng.bit_generator.state = state["rng"]
+        self.decisions, self.seconds = int(state["decisions"]), float(state["seconds"])
+        return int(state["update"]), RLLog(state["log"]["points"], state["log"]["updates"])
+
     # ------------------------------------------------------------ loop
-    def train(self, evaluate: EvalFn, on_point: Callable[[RLLog], None] | None = None) -> RLLog:
-        log = RLLog()
-        log.points.append({"decisions": 0, "score": evaluate(self.policy), "seconds": 0.0})
-        if on_point:
-            on_point(log)
-        for u in range(1, self.cfg.rl_updates + 1):
+    def train(
+        self,
+        evaluate: EvalFn,
+        on_point: Callable[[RLLog], None] | None = None,
+        checkpoint: Path | None = None,
+    ) -> RLLog:
+        resumed = self.load_checkpoint(checkpoint) if checkpoint else None
+        if resumed:
+            start, log = resumed
+            log_msg = f"resumed from update {start} ({self.decisions} decisions)"
+            log.updates.append({"update": start, "event": log_msg})  # type: ignore[dict-item]
+        else:
+            start, log = 0, RLLog()
+            log.points.append({"decisions": 0, "score": evaluate(self.policy), "seconds": 0.0})
+            if on_point:
+                on_point(log)
+        for u in range(start + 1, self.cfg.rl_updates + 1):
             t0 = time.perf_counter()
             batch = self.rollout()
             stats = self.update(batch)
@@ -168,4 +216,6 @@ class KevRLTrainer:
                 )
                 if on_point:
                     on_point(log)
+            if checkpoint and (u % self.cfg.checkpoint_every_updates == 0 or u == self.cfg.rl_updates):
+                self.save_checkpoint(checkpoint, u, log)
         return log

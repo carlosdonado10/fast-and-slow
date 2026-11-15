@@ -7,8 +7,11 @@ SB3's timestep counter is the x axis of the learning curve.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import gymnasium as gym
@@ -92,16 +95,34 @@ def log_checkpoints(total: int, n: int, first: int = 100) -> list[int]:
 
 
 class _CurveCallback(BaseCallback):
-    def __init__(self, checkpoints: list[int], on_checkpoint: Callable[[int], None]):
+    """Evaluates at the learning-curve checkpoints and saves a resumable checkpoint every `save_every` decisions."""
+
+    def __init__(
+        self,
+        checkpoints: list[int],
+        on_checkpoint: Callable[[int], None],
+        save_every: int = 0,
+        on_save: Callable[[], None] | None = None,
+    ):
         super().__init__()
         self.pending = list(checkpoints)
-        self.on_checkpoint = on_checkpoint
+        self.on_checkpoint, self.save_every, self.on_save = on_checkpoint, save_every, on_save
+        self.last_save = 0
 
     def _on_step(self) -> bool:
         while self.pending and self.num_timesteps >= self.pending[0]:
             self.pending.pop(0)
             self.on_checkpoint(self.num_timesteps)
+        if self.on_save and self.save_every and self.num_timesteps - self.last_save >= self.save_every:
+            self.last_save = self.num_timesteps
+            self.on_save()
         return True
+
+
+def _atomic_write(path: Path, data: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(data)
+    os.replace(tmp, path)
 
 
 def train_ppo(
@@ -115,46 +136,76 @@ def train_ppo(
     eval_points: int,
     evaluate: Callable[[Agent], float],
     seed: int = 0,
+    checkpoint: Path | None = None,
+    save_every: int = 25_000,
 ) -> tuple[PPO, list[dict[str, float]]]:
-    """Train PPO and return the model and its learning curve [{decisions, score, seconds}]."""
+    """Train PPO and return the model and its learning curve [{decisions, score, seconds}].
+
+    With `checkpoint` (a directory), the model and the curve are saved every `save_every` decisions and at every curve
+    point; a later call with the same directory continues from there. The policy, optimizer and step count resume
+    exactly; which training scenarios come next does not (the env RNG restarts), which leaves the statistics unchanged.
+    """
 
     def make(i: int) -> Callable[[], DeskEnv]:
         return lambda: DeskEnv(world, bank, horizon, variant, embedder, seed=seed * 1000 + i)
 
     env = DummyVecEnv([make(i) for i in range(n_envs)])
-    n_steps = max(16, min(256, total_decisions // (n_envs * 4)))
-    model = PPO(
-        "MlpPolicy",
-        env,
-        n_steps=n_steps,
-        batch_size=min(256, n_steps * n_envs),
-        learning_rate=3e-4,
-        gamma=1.0,
-        gae_lambda=0.95,
-        ent_coef=0.01,
-        policy_kwargs={"net_arch": [128, 128]},
-        seed=seed,
-        verbose=0,
-        device="cpu",
-    )
-    name = f"ppo_{variant}"
+    model_file = checkpoint / "model.zip" if checkpoint else None
+    curve_file = checkpoint / "curve.json" if checkpoint else None
     curve: list[dict[str, float]] = []
+    if model_file and curve_file and model_file.exists() and curve_file.exists():
+        model = PPO.load(model_file, env=env, device="cpu")
+        curve = json.loads(curve_file.read_text())
+    else:
+        n_steps = max(16, min(256, total_decisions // (n_envs * 4)))
+        model = PPO(
+            "MlpPolicy",
+            env,
+            n_steps=n_steps,
+            batch_size=min(256, n_steps * n_envs),
+            learning_rate=3e-4,
+            gamma=1.0,
+            gae_lambda=0.95,
+            ent_coef=0.01,
+            policy_kwargs={"net_arch": [128, 128]},
+            seed=seed,
+            verbose=0,
+            device="cpu",
+        )
+    name = f"ppo_{variant}"
+    base_seconds = curve[-1]["seconds"] if curve else 0.0
     started = time.perf_counter()
-    train_time = [0.0]
+    eval_time = [0.0]
 
-    def checkpoint(decisions: int) -> None:
-        train_time[0] = time.perf_counter() - started - sum(p.get("eval_seconds", 0.0) for p in curve)
+    def train_seconds() -> float:
+        return base_seconds + time.perf_counter() - started - eval_time[0]
+
+    def save() -> None:
+        if model_file and curve_file:
+            model_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = model_file.with_name("model.tmp.zip")
+            model.save(tmp)
+            os.replace(tmp, model_file)
+            _atomic_write(curve_file, json.dumps(curve))
+
+    def point(decisions: int) -> None:
         t0 = time.perf_counter()
         score = evaluate(PPOAgent(name, world, model, variant, embedder))
-        curve.append(
-            {"decisions": decisions, "score": score, "seconds": train_time[0], "eval_seconds": time.perf_counter() - t0}
-        )
+        spent = time.perf_counter() - t0
+        eval_time[0] += spent
+        curve.append({"decisions": decisions, "score": score, "seconds": train_seconds(), "eval_seconds": spent})
+        save()
 
-    checkpoint(0)
-    model.learn(
-        total_timesteps=total_decisions,
-        callback=_CurveCallback(log_checkpoints(total_decisions, eval_points), checkpoint),
-    )
-    if not curve or curve[-1]["decisions"] < model.num_timesteps:
-        checkpoint(int(model.num_timesteps))
+    if not curve:
+        point(0)
+    done = int(model.num_timesteps)
+    if done < total_decisions:
+        pending = [c for c in log_checkpoints(total_decisions, eval_points) if c > done]
+        model.learn(
+            total_timesteps=total_decisions - done,
+            reset_num_timesteps=False,
+            callback=_CurveCallback(pending, point, save_every, save),
+        )
+    if curve[-1]["decisions"] < model.num_timesteps:
+        point(int(model.num_timesteps))
     return model, curve

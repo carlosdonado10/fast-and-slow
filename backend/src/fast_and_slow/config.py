@@ -72,6 +72,7 @@ class KevConfig(BaseModel):
     rl_entropy: float = 0.01
     rl_reward_scale: float = 0.01
     eval_every_updates: int = 10
+    checkpoint_every_updates: int = 5  # ~5-10 min of H100 time between checkpoints
 
 
 class ClassicRLConfig(BaseModel):
@@ -80,6 +81,7 @@ class ClassicRLConfig(BaseModel):
     n_envs: int = 8
     eval_points: int = 12  # log-spaced checkpoints along training
     embedder: str = "BAAI/bge-small-en-v1.5"
+    checkpoint_every_decisions: int = 25_000
     embed_dim: int = 384
 
 

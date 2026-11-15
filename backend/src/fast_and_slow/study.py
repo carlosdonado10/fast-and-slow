@@ -8,6 +8,7 @@ runs/<profile>/
   evals/<arm>/H{h}/seed{s}.json     final evaluation (all held-out scenarios, every decision labelled)
   curves/<arm>/H{h}/seed{s}.json    learning curve: [{decisions, score, seconds}] (+ RL update logs)
   weights/<arm>/H{h}/seed{s}/       trained Kev adapters (not committed; sync to Drive)
+  checkpoints/<arm>/H{h}/seed{s}/   mid-run state (policy, optimizer, RNG, curve) so a dropped Colab session resumes
 """
 
 from __future__ import annotations
@@ -197,9 +198,10 @@ class Study:
         rl_log = trainer.train(
             evaluate_policy,
             on_point=lambda lg: self._write(curve_path, {"points": lg.points, "updates": lg.updates}),
+            checkpoint=self.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}",
         )
         self._write(curve_path, {"points": rl_log.points, "updates": rl_log.updates, "train_seconds": trainer.seconds})
-        policy.save(self.path("weights", "kev_rl", f"H{h}", f"seed{seed}", "x").parent)
+        policy.save(self.root / "weights" / "kev_rl" / f"H{h}" / f"seed{seed}")
         res = evaluate(KevAgent("kev_rl", w, policy), w, self.bank, self.scenarios(h), self.labeller(h))
         self._write(p, res.to_json())
         self._policy = None  # the next arm reloads clean weights
@@ -214,7 +216,18 @@ class Study:
         w, c = self.cfg.world, self.cfg.classic
         emb = self.embedder() if variant == "emb" else None
         model, curve = train_ppo(
-            w, self.bank, h, variant, emb, c.total_decisions, c.n_envs, c.eval_points, self.curve_scorer(h), seed=seed
+            w,
+            self.bank,
+            h,
+            variant,
+            emb,
+            c.total_decisions,
+            c.n_envs,
+            c.eval_points,
+            self.curve_scorer(h),
+            seed=seed,
+            checkpoint=self.root / "checkpoints" / arm / f"H{h}" / f"seed{seed}",
+            save_every=c.checkpoint_every_decisions,
         )
         self._write(self.path("curves", arm, f"H{h}", f"seed{seed}.json"), {"points": curve})
         res = evaluate(PPOAgent(arm, w, model, variant, emb), w, self.bank, self.scenarios(h), self.labeller(h))

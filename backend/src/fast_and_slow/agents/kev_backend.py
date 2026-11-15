@@ -77,3 +77,11 @@ class KevPolicy:
             },
             path / "kev_rl_weights.pt",
         )
+
+    def load(self, path: Path) -> None:
+        state = torch.load(path / "kev_rl_weights.pt", map_location=self.device)
+        params = dict(self.model.named_parameters())
+        with torch.no_grad():
+            for n, t in state["adapter"].items():
+                params[n].copy_(t.to(params[n].device, params[n].dtype))
+        self.model.head.load_state_dict(state["head"])

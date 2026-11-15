@@ -35,6 +35,8 @@ class DecisionPolicy(Protocol):
 
     def save(self, path: Path) -> None: ...
 
+    def load(self, path: Path) -> None: ...
+
 
 _TOKEN = re.compile(r"[a-z0-9$]+")
 
@@ -90,6 +92,9 @@ class FakePolicy(nn.Module):
     def save(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
         torch.save(self.state_dict(), path / "fake_policy.pt")
+
+    def load(self, path: Path) -> None:
+        self.load_state_dict(torch.load(path / "fake_policy.pt"))
 
 
 def load_policy(run: str, fake: bool, dtype: str = "bf16", seed: int = 0) -> DecisionPolicy:
