@@ -78,3 +78,32 @@ repos:
         types: [python]
         files: ^backend/
         pass_filenames: false
+
+      # Frontend (Vite + React report). pnpm runs each tool from frontend/'s lockfile.
+      - id: frontend-prettier
+        name: prettier (frontend)
+        language: system
+        entry: pnpm --dir frontend format:check
+        files: ^frontend/
+        pass_filenames: false
+
+      - id: frontend-eslint
+        name: eslint (frontend)
+        language: system
+        entry: pnpm --dir frontend lint
+        files: ^frontend/
+        pass_filenames: false
+
+      - id: frontend-tsc
+        name: tsc (frontend)
+        language: system
+        entry: pnpm --dir frontend typecheck
+        files: ^frontend/
+        pass_filenames: false
+
+      - id: frontend-vitest
+        name: vitest (frontend, coverage >= 80%)
+        language: system
+        entry: pnpm --dir frontend test:coverage
+        files: ^frontend/
+        pass_filenames: false
