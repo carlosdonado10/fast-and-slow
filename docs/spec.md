@@ -32,6 +32,7 @@ A **research study with an interactive report.** It isn't a product to deploy in
 | H3 | A JEV-style model is **good at one-shot decisions, weaker at long-horizon (multi-step) ones**. | Kev's gap to optimal as the horizon grows from 1 to 4 to 12. |
 | H4 | Calibrated confidence lets a JEV-style model **hand off safely**: it is confident on decidable calls and unsure on judgement calls. | Automation rate at a 5% error budget; split by decidable vs judgement. |
 | H5 | **Context without fine-tuning** (rules and worked examples in the prompt) recovers part of the fine-tuning gain for free. | In-context arm vs zero-shot and RL-fine-tuned. |
+| H6 | **A System One model bridges regime changes.** When the business changes, a deployed RL policy is quietly wrong until it's retrained; a context-reading model can take over during the transition and hand back once retrained RL overtakes it. | Transition regret: bridge vs stale RL vs retrain-without-bridge, for announced and silent shifts, with retraining paid by a rebuilt simulator or by live experience; plus detection delay and false alarms, Kev vs a statistical detector. See section 2b. |
 
 ---
 
@@ -57,6 +58,46 @@ One product, H weekly periods (**the horizon dial: H ∈ {1, 4, 12}**). Each wee
 For each decision we compute the Bayes posterior over regimes. A decision is **decidable** if the Bayes-optimal action is also the full-information optimal action under *every* regime with posterior ≥ 0.15. Knowing the truth wouldn't change the call, so a dominant strategy exists. Otherwise it is a **judgement call**. This label never reaches the agents; it only drives the analysis for H4.
 
 ---
+
+## 2b. Regime changes: who decides while the model catches up? (H6)
+
+**The planner's problem.** A deployed RL policy encodes the world it was trained on. When the business changes (a new contract, a new competitor), the policy keeps making confident decisions for a world that no longer exists. Retraining fixes that, but it isn't free: someone has to notice, update the simulator or gather new experience, and retrain. Experimentation on a live business is expensive. **The question is who makes the calls in between.**
+
+**The proposal being tested.** Use the System One model as the *bridge*:
+1. **Detect:** each week it answers a typed question, "has something changed that the usual playbook doesn't cover?"
+2. **Cover:** once a change is declared (by a planner, or by that alarm), it makes the calls with the new situation written into its brief.
+3. **Hand back:** when retrained RL scores better on the new world than the bridge does, RL takes over again.
+
+**Shifts tested** (both happen at week 20 of a 52-week deployment of monthly, H=4 plans):
+| Shift | What changes | How it shows | Why it's here |
+|---|---|---|---|
+| **Announced economics change** | A key account adds late-delivery penalties: stockout penalty 10 → 30 | An email in the inbox on the week it starts | Readable as text. A numbers-only detector can't see it at all |
+| **Silent demand shift** | A competitor enters: every regime's demand drops 40% | Only in the sales numbers | Tests detection from data, where a statistical detector should be strong |
+
+**Triggers compared:** a planner declares the change on the week it happens (the best case for the bridge), or the Kev alarm fires (realistic: delay and false alarms count against it).
+
+**Retraining, two ways** (one warm-started PPO retraining curve on the new world, mapped onto the calendar two ways):
+- **Rebuilt simulator:** the company updates its simulator, which takes `rebuild_weeks` (default 6); offline retraining is then fast. RL is back at full strength once the rebuild is done.
+- **Live experience only:** no simulator update; RL learns only from the weeks it actually plays, pooled across `live_units` products or sites (default 50). By week *w* after the shift it has seen 50 × 4 × *w* decisions of the new world.
+
+**Arms over the 52 weeks:** stale PPO (never retrained), PPO retrained (sim / live), Kev with the updated brief (from the trigger on), and the **bridge** (stale PPO until the trigger, Kev until retrained PPO beats it, then PPO). The perfect-information and Bayes planners of each world are the references.
+
+**Metrics:**
+- % of the new world's optimum, week by week (the transition timeline);
+- **transition regret**: profit lost against Bayes, summed from the shift to week 52;
+- **weeks to recover** (rolling score back within 90% of optimal);
+- **regret saved by bridging**;
+- for detection: **delay** (weeks from the shift to the first alarm) and **false-alarm rate** (alarms per 100 pre-shift weeks), Kev vs a Page–Hinkley detector on demand.
+
+**H6 verdict rule (pre-registered):** supported if, for both shifts and both retraining modes, the planner-declared bridge cuts transition regret by ≥ 25% against the best non-bridge arm; not supported if it cuts it by less than 5% anywhere; otherwise inconclusive. Detection is reported alongside as the cost of not having a planner in the loop.
+
+**Decisions:**
+- *Shifts at the episode boundary, plans of H=4.* A plan starts in one world, which keeps the Bayes reference exact. Rejected: a mid-plan shift (no clean optimum).
+- *One retraining curve, two calendar mappings.* The same PPO, warm-started on the new world; the two modes differ only in how fast experience arrives. Rejected: two separate trainings, which would mix the effect of the mode with training noise.
+- *Pooling live experience across 50 units.* A real planning team runs one policy over many SKUs or sites. With a single unit, live retraining would never recover within a year, which is true but uninformative.
+- *Cheap on the budget:* no Kev training. Kev only evaluates on the new world and runs the weekly alarm (minutes of GPU); PPO retraining runs on the laptop.
+
+**Report feature F11, the transition timeline.** For the planner deciding what to do the week something changes: a 52-week strip per arm with the shift marked, the bridge's hand-back point, the shaded regret area, a toggle between shifts and retraining modes, and a detection panel (delay vs false alarms, Kev vs statistics). *Why this view:* the question is about time ("how long am I exposed, and what does it cost?"), so the x axis is calendar weeks, not decisions.
 
 ## 3. The arms (what learns, and how)
 

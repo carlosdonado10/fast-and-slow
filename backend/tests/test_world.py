@@ -94,3 +94,9 @@ def test_profiles_and_yaml_overrides(tmp_path) -> None:  # type: ignore[no-untyp
     c = load(str(f))
     assert c.eval.horizons == (2,) and c.kev.rl_updates == 1 and c.kev.fake is True
     assert smoke().profile == "smoke"
+
+
+def test_demand_pmf_never_negative_even_when_the_tail_is_negligible() -> None:
+    w = WorldConfig(demand_means=(1.8, 6.0, 14.4), max_demand=40)
+    pmf = demand_pmf(w)
+    assert (pmf >= 0).all() and np.allclose(pmf.sum(1), 1)

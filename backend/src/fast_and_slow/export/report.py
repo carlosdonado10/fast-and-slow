@@ -11,6 +11,7 @@ import numpy as np
 
 from ..agents.base import Agent
 from ..eval import metrics as M
+from ..eval import transition as T
 from ..eval.runner import EvalResult
 from ..sim.desk import Episode
 from ..sim.world import CLAIMS, Note
@@ -271,8 +272,72 @@ class ReportBuilder:
             }
         return out
 
+    # ------------------------------------------------------------ H6
+    def shifts(self) -> dict[str, Any]:
+        from ..shift_study import ShiftStudy
+
+        c = self.cfg.shift
+        out: dict[str, Any] = {}
+        for name in c.shifts:
+            ss = ShiftStudy(self.s, name)
+            res = ss.results()
+            if res is None:
+                continue
+            refs = res["refs"]
+            gap = (refs["bayes"] - refs["random"]) / c.horizon
+            kev_delay = res["detect"]["kev"]["matched"]["median_delay_weeks"]
+            triggers = {
+                "declared": c.shift_week,
+                "detected": None if kev_delay is None else c.shift_week + round(kev_delay),
+            }
+            tl: dict[str, Any] = {}
+            for trig, week in triggers.items():
+                for mode in ("sim", "live"):
+                    for v, ppo in res["ppo"].items():
+                        curve = [T.CurvePt(int(p["decisions"]), float(p["score"])) for p in ppo["points"]]
+                        t = T.timeline(c, ppo["pre_shift_score"], curve, res["kev"]["declared"], week, mode, gap)
+                        tl[f"{trig}|{mode}|{v}"] = {
+                            "trigger": trig,
+                            "mode": mode,
+                            "variant": v,
+                            "trigger_week": week,
+                            "weekly": t.weekly,
+                            "regret_usd": t.regret_usd,
+                            "recover_week": t.recover_week,
+                            "handback_week": t.handback_week,
+                            "bridge_saving": T.bridge_saving(t),
+                        }
+            out[name] = {
+                "label": ss.shift.label,
+                "kind": ss.shift.kind,
+                "declared_note": ss.shift.declared_note,
+                "announcement": ss.shift.announcements[0] if ss.shift.announcements else None,
+                "weeks": c.weeks,
+                "shift_week": c.shift_week,
+                "horizon": c.horizon,
+                "rebuild_weeks": c.rebuild_weeks,
+                "live_units": c.live_units,
+                "recover_at": c.recover_at,
+                "references": refs,
+                "kev": res["kev"],
+                "ppo": {
+                    v: {
+                        "pre_shift_score": p["pre_shift_score"],
+                        "curve": [{"decisions": q["decisions"], "score": q["score"]} for q in p["points"]],
+                    }
+                    for v, p in res["ppo"].items()
+                },
+                "detection": {
+                    k: {kk: vv for kk, vv in d.items()} for k, d in res["detect"].items() if isinstance(d, dict)
+                },
+                "timelines": tl,
+            }
+        return out
+
     # ------------------------------------------------------------ verdicts
-    def verdicts(self, results: dict[int, Any], eff: dict[int, Any]) -> list[dict[str, Any]]:
+    def verdicts(
+        self, results: dict[int, Any], eff: dict[int, Any], shifts: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         hyp = {h["id"]: dict(h) for h in narrative.HYPOTHESES}
 
         def pct(h: int, arm: str) -> float | None:
@@ -355,6 +420,23 @@ class ReportBuilder:
             share = icl / rl if rl > 0 else float("inf") if icl > 0 else 0.0
             v = "supported" if icl > 0 and share >= 0.25 else "not supported" if icl <= 0 else "inconclusive"
             put("H5", v, f"Context adds {icl:+.1f} points over zero-shot; RL adds {rl:+.1f}.")
+        # H6
+        savings = [
+            t["bridge_saving"]
+            for sh in (shifts or {}).values()
+            for t in sh["timelines"].values()
+            if t["trigger"] == "declared"
+        ]
+        if savings:
+            lo, hi = min(savings), max(savings)
+            v = "supported" if lo >= 0.25 else "not supported" if lo < 0.05 else "inconclusive"
+            put(
+                "H6",
+                v,
+                f"When a planner declares the change, bridging with Kev cuts transition regret by "
+                f"{100 * lo:.0f}–{100 * hi:.0f}% vs the better RL-only strategy, across shifts, "
+                f"retraining modes and PPO variants.",
+            )
         for item in hyp.values():
             item.setdefault("verdict", "pending")
             item.setdefault("evidence", "Not enough runs yet.")
@@ -381,6 +463,7 @@ class ReportBuilder:
             for arm in narrative.ARMS
         }
         w = self.cfg.world
+        shift_section = self.shifts()
         report = {
             "meta": {
                 "title": "Fast and Slow",
@@ -406,7 +489,8 @@ class ReportBuilder:
             "costs": self.costs(),
             "replays": self.replays(),
             "desk": self.desk_example(),
-            "hypotheses": self.verdicts(results, eff),
+            "shifts": shift_section,
+            "hypotheses": self.verdicts(results, eff, shift_section),
             "features": narrative.FEATURES,
             "decisions": narrative.DECISIONS,
             "limitations": narrative.LIMITATIONS,

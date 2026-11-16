@@ -82,6 +82,22 @@ def ppo(
     _study(profile, runs).ppo(variant, horizon, seed, force)
 
 
+@app.command()
+def shift(
+    profile: str = Profile,
+    runs: Path = Runs,
+    part: str = typer.Option(..., "--part", help="cpu: references + PPO retraining (laptop) | gpu: Kev + the alarm"),
+    name: str = typer.Option("", "--name", help="one shift (default: every shift in the config)"),
+    force: bool = Force,
+) -> None:
+    """H6 regime changes: measure what the transition timelines need."""
+    from .shift_study import run_shift
+
+    s = _study(profile, runs)
+    for n in [name] if name else s.cfg.shift.shifts:
+        typer.echo(run_shift(s, n, part, force))
+
+
 @app.command("ppo-all")
 def ppo_all(profile: str = Profile, runs: Path = Runs, force: bool = Force) -> None:
     """Every PPO run in the plan. CPU only: meant for a laptop, so it costs no Colab units."""
@@ -119,6 +135,11 @@ def run_all(
         s.kev_rl(h, seed, force)
     for v, h, seed in s.ppo_runs():
         s.ppo(v, h, seed, force)
+    from .shift_study import run_shift
+
+    for n in s.cfg.shift.shifts:
+        run_shift(s, n, "cpu", force)
+        run_shift(s, n, "gpu", force)
     typer.echo(export_report(s, out))
 
 
@@ -137,6 +158,10 @@ def status(profile: str = Profile, runs: Path = Runs) -> None:
         rows.append((f"kev_rl H{h} seed{seed}{tag}", s.root / "evals" / "kev_rl" / f"H{h}" / f"seed{seed}.json"))
     for v, h, seed in s.ppo_runs():
         rows.append((f"ppo_{v} H{h} seed{seed}", s.root / "evals" / f"ppo_{v}" / f"H{h}" / f"seed{seed}.json"))
+    for n in c.shift.shifts:
+        d = s.root / "shifts" / n
+        rows.append((f"shift {n}: kev + alarm (gpu)", d / "detect.json"))
+        rows += [(f"shift {n}: ppo_{v} retrain (cpu)", d / f"ppo_{v}.json") for v in c.shift.ppo_variants]
     done = sum(p.exists() for _, p in rows)
     for name, p in rows:
         typer.echo(f"{'done' if p.exists() else '    '}  {name}")

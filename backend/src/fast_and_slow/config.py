@@ -105,6 +105,25 @@ class EvalConfig(BaseModel):
     budget_cu: float = 100.0
 
 
+class ShiftConfig(BaseModel):
+    """H6: regime changes over a deployment (docs/spec.md section 2b)."""
+
+    shifts: tuple[str, ...] = ("contract_penalty", "competitor_entry")
+    horizon: int = 4  # monthly plans
+    weeks: int = 52
+    shift_week: int = 20  # must sit on a plan boundary
+    rebuild_weeks: int = 6  # time to update the simulator before offline retraining
+    live_units: int = 50  # products / sites sharing one policy: live decisions per week
+    ppo_variants: tuple[str, ...] = ("num", "emb")
+    retrain_decisions: int = 200_000
+    retrain_eval_points: int = 10
+    scenarios: int = 120  # held-out plans in the new world
+    detect_streams: int = 30  # 52-week streams for the alarm
+    calibration_streams: int = 30  # no-shift streams to set each detector's threshold
+    false_alarm_target: float = 0.02  # alarms per pre-shift week both detectors are calibrated to
+    recover_at: float = 90.0  # % of optimal that counts as recovered
+
+
 class StudyConfig(BaseModel):
     profile: str = "smoke"
     seeds: tuple[int, ...] = (0,)  # Kev RL seeds (GPU, the expensive arm)
@@ -115,6 +134,7 @@ class StudyConfig(BaseModel):
     kev: KevConfig = Field(default_factory=KevConfig)
     classic: ClassicRLConfig = Field(default_factory=ClassicRLConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
+    shift: ShiftConfig = Field(default_factory=ShiftConfig)
 
 
 def smoke() -> StudyConfig:
@@ -134,6 +154,18 @@ def smoke() -> StudyConfig:
         classic=ClassicRLConfig(total_decisions=6_000, n_envs=4, eval_points=4, variants=("num", "sig"), seeds=(0,)),
         eval=EvalConfig(
             horizons=(1, 4), scenarios_per_horizon=24, curve_scenarios=12, bootstrap=200, replay_scenarios=2
+        ),
+        shift=ShiftConfig(
+            weeks=24,
+            shift_week=8,
+            rebuild_weeks=4,
+            live_units=20,
+            ppo_variants=("num",),
+            retrain_decisions=3_000,
+            retrain_eval_points=3,
+            scenarios=8,
+            detect_streams=4,
+            calibration_streams=4,
         ),
     )
 

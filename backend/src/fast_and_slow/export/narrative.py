@@ -92,6 +92,13 @@ HYPOTHESES: list[dict[str, str]] = [
         "rule": "Supported if Kev+context gains over zero-shot >= 25% of what Kev+RL gains (and more than 0); "
         "not supported if context doesn't help at all.",
     },
+    {
+        "id": "H6",
+        "statement": "A System One model bridges regime changes: it covers the transition while RL is retrained.",
+        "rule": "Supported if, when a planner declares the change, the bridge (Kev until retrained RL beats it) cuts "
+        "transition regret by >= 25% vs the better RL-only strategy, for both shifts, both retraining modes and "
+        "every PPO variant; not supported if it saves < 5% anywhere.",
+    },
 ]
 
 FEATURES: list[dict[str, str]] = [
@@ -227,6 +234,8 @@ LIMITATIONS: list[str] = [
     "A synthetic world with one product and three demand regimes; real planning has many SKUs, lead times and constraints.",
     "One decision-model family (Kev on Qwen3.5) at one size; the closed JEV may behave differently.",
     "Horizons up to 12 weeks. Longer plans could widen or close the multi-step gap.",
+    "Regime changes are two stylised shifts at a plan boundary; real changes arrive gradually and mixed.",
+    "Live retraining pools 50 identical products; real portfolios are heterogeneous.",
     "RL budgets are bounded (~25 H100-hours). Kev+RL curves may not have converged.",
     "Notes are generated text. They vary in wording but not in the messiness of real inboxes.",
 ]

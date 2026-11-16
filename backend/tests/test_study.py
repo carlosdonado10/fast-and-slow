@@ -64,7 +64,10 @@ def test_report_has_every_section_the_frontend_reads(smoke_runs: tuple[Path, Pat
     ):
         assert key in r, key
     assert r["meta"]["profile"] == "smoke"
-    assert {h["id"] for h in r["hypotheses"]} == {"H1", "H2", "H3", "H4", "H5"}
+    assert {h["id"] for h in r["hypotheses"]} == {"H1", "H2", "H3", "H4", "H5", "H6"}
+    assert set(r["shifts"]) == {"contract_penalty", "competitor_entry"}
+    tl = r["shifts"]["contract_penalty"]["timelines"]["declared|sim|num"]
+    assert len(tl["weekly"]["bridge"]) == r["shifts"]["contract_penalty"]["weeks"]
     assert all(h["verdict"] in {"supported", "not supported", "inconclusive", "pending"} for h in r["hypotheses"])
     res = r["results"]["4"]["bayes"]
     assert res["pct_optimal"]["mean"] == pytest.approx(100)
@@ -124,7 +127,14 @@ def test_verdict_rules(cfg: StudyConfig, tmp_path: Path) -> None:
         for h in H
     }
     v = {x["id"]: x["verdict"] for x in _builder_with(results, eff, H, cfg, tmp_path)}
-    assert v == {"H1": "supported", "H2": "supported", "H3": "supported", "H4": "supported", "H5": "supported"}
+    assert v == {
+        "H1": "supported",
+        "H2": "supported",
+        "H3": "supported",
+        "H4": "supported",
+        "H5": "supported",
+        "H6": "pending",
+    }
 
     results = {
         h: {
@@ -150,6 +160,7 @@ def test_verdict_rules(cfg: StudyConfig, tmp_path: Path) -> None:
         "H3": "not supported",
         "H4": "not supported",
         "H5": "not supported",
+        "H6": "pending",
     }
 
     v = {x["id"]: x["verdict"] for x in _builder_with({1: {}}, {1: {}}, [1], cfg, tmp_path)}
@@ -167,3 +178,17 @@ def test_status_and_kev_check(smoke_runs: tuple[Path, Path]) -> None:
     ck = CliRunner().invoke(app, ["kev-check", "--profile", "smoke", "--runs", str(runs)])
     assert ck.exit_code == 0, ck.output
     assert "RL can run" in ck.output
+
+
+def test_h6_verdict_rule(cfg: StudyConfig, tmp_path: Path) -> None:
+    b = ReportBuilder(Study(cfg, tmp_path))
+
+    def h6(*savings: float) -> str:
+        shifts = {
+            "s": {"timelines": {str(i): {"trigger": "declared", "bridge_saving": x} for i, x in enumerate(savings)}}
+        }
+        return next(x["verdict"] for x in b.verdicts({1: {}}, {1: {}}, shifts) if x["id"] == "H6")
+
+    assert h6(0.3, 0.6) == "supported"
+    assert h6(0.3, 0.02) == "not supported"
+    assert h6(0.3, 0.1) == "inconclusive"

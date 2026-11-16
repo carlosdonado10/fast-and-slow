@@ -13,6 +13,7 @@ from .desk import Observation
 
 ORDER_Q = "order"
 REGIME_Q = "regime"
+CHANGE_Q = "changed"
 
 
 def order_key(q: int) -> str:
@@ -74,3 +75,16 @@ def request(w: WorldConfig, obs: Observation, context: str | None = None) -> dic
         "state": state_text(w, obs, context),
         "questions": {ORDER_Q: order_question(w), REGIME_Q: regime_question()},
     }
+
+
+def change_question() -> dict[str, Any]:
+    """The weekly alarm (H6): a yes/no question, scored as P(true)."""
+    return {
+        "type": "noul",
+        "instructions": "Has something changed in the business that the usual planning playbook does not account for?",
+    }
+
+
+def question_keys(q: dict[str, Any]) -> list[str]:
+    """Option keys in the order a policy scores them: the criteria for a choice, false/true for a yes/no (noul)."""
+    return ["false", "true"] if q["type"] == "noul" else list(q["criteria"])

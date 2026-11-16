@@ -62,6 +62,10 @@ def lines(cfg: StudyConfig, speed: Speed) -> list[Line]:
         for h in cfg.kev.rl_horizons:
             d, hrs = rl_hours(cfg, speed, h)
             out.append(Line(f"kev_rl H={h} seed {s}", d, hrs))
+    sh = cfg.shift
+    per_shift = 2 * sh.scenarios * sh.horizon + (sh.detect_streams + sh.calibration_streams) * sh.weeks
+    n = per_shift * len(sh.shifts)
+    out.append(Line(f"H6 shifts (Kev + alarm, {len(sh.shifts)})", n, n * speed.forward_order / 3600))
     return out
 
 

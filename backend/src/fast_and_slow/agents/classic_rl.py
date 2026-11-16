@@ -138,12 +138,14 @@ def train_ppo(
     seed: int = 0,
     checkpoint: Path | None = None,
     save_every: int = 25_000,
+    init: Path | None = None,
 ) -> tuple[PPO, list[dict[str, float]]]:
     """Train PPO and return the model and its learning curve [{decisions, score, seconds}].
 
     With `checkpoint` (a directory), the model and the curve are saved every `save_every` decisions and at every curve
     point; a later call with the same directory continues from there. The policy, optimizer and step count resume
     exactly; which training scenarios come next does not (the env RNG restarts), which leaves the statistics unchanged.
+    With `init` (a saved model.zip), a fresh run starts from that policy instead of from scratch (H6 retraining).
     """
 
     def make(i: int) -> Callable[[], DeskEnv]:
@@ -156,6 +158,11 @@ def train_ppo(
     if model_file and curve_file and model_file.exists() and curve_file.exists():
         model = PPO.load(model_file, env=env, device="cpu")
         curve = json.loads(curve_file.read_text())
+    elif init is not None:
+        # warm start (H6 retraining): the old world's policy keeps learning in the new one, counting from zero
+        model = PPO.load(init, env=env, device="cpu")
+        model.num_timesteps = 0
+        model._num_timesteps_at_start = 0
     else:
         n_steps = max(16, min(256, total_decisions // (n_envs * 4)))
         model = PPO(

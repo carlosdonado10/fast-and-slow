@@ -17,6 +17,7 @@ A research project with an interactive report. A JEV-style decision model ([Kev-
 | H3 | It's good at one-shot decisions and weaker at multi-step planning |
 | H4 | Calibrated confidence lets it hand off safely: sure on decidable calls, unsure on judgement calls |
 | H5 | Context in the prompt, without fine-tuning, recovers part of the fine-tuning gain |
+| H6 | When the business changes, it bridges the transition (detects the change, makes the calls) until retrained RL overtakes it |
 
 Each verdict is computed by the export step from rules written down before the runs (`backend/src/fast_and_slow/export/narrative.py`).
 

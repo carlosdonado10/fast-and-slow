@@ -16,6 +16,7 @@ from typing import Any
 
 import torch
 
+from ..sim.render import question_keys
 from .policy import Request
 
 
@@ -42,7 +43,9 @@ class KevPolicy:
     def _record(self, req: Request) -> tuple[dict[str, Any], list[str]]:
         from kev.data import materialize
 
-        first = {qid: next(iter(q["criteria"])) for qid, q in req["questions"].items()}
+        first = {
+            qid: (False if q["type"] == "noul" else next(iter(q["criteria"]))) for qid, q in req["questions"].items()
+        }
         labelled = {
             "state": req["state"],
             "questions": {
@@ -51,7 +54,7 @@ class KevPolicy:
         }
         rec = materialize(labelled)
         for q, (qid, src) in zip(rec["questions"], req["questions"].items(), strict=True):
-            if list(q["keys"]) != list(src["criteria"]):
+            if list(q["keys"]) != question_keys(src):
                 raise RuntimeError(f"Kev reordered options for {qid}: {q['keys']}")
         return rec, list(req["questions"])
 

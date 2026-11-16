@@ -19,6 +19,8 @@ from typing import Any, Protocol
 import torch
 from torch import nn
 
+from ..sim.render import question_keys
+
 Request = dict[str, Any]
 
 
@@ -73,8 +75,8 @@ class FakePolicy(nn.Module):
         s = hashed_bag(req["state"], self.buckets) @ self.state_proj
         out = {}
         for qid, q in req["questions"].items():
-            crit = q["criteria"]
-            texts = [f"{k} {v or ''} {q['instructions']}" for k, v in crit.items()]
+            crit = q.get("criteria") or {}
+            texts = [f"{k} {crit.get(k) or ''} {q['instructions']}" for k in question_keys(q)]
             o = torch.stack([hashed_bag(t, self.buckets) for t in texts]) @ self.option_proj
             out[qid] = o @ s * 4.0 + self.head_bias
         return out

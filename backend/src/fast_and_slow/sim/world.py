@@ -64,7 +64,8 @@ def _demand_pmf(means: tuple[float, ...], max_demand: int) -> np.ndarray:
     d = np.arange(max_demand + 1)
     pmf = np.stack([poisson.pmf(d, m) for m in means])
     pmf[:, -1] += 1 - pmf.sum(axis=1)  # lump the tail into the cap
-    return pmf
+    pmf = np.clip(pmf, 0.0, None)  # a ~0 tail can round to -1e-16; probabilities must stay >= 0
+    return pmf / pmf.sum(axis=1, keepdims=True)
 
 
 def demand_pmf(w: WorldConfig) -> np.ndarray:
@@ -106,18 +107,22 @@ def sample_scenario(w: WorldConfig, horizon: int, seed: int, variants_per_cell: 
             z = int(rng.choice(k, p=T[z]))
         regimes.append(z)
         demands.append(int(rng.choice(w.max_demand + 1, p=pmf[z])))
-        variant = int(rng.integers(variants_per_cell))
-        u = rng.random()
-        if u >= w.note_prob:
-            notes.append(Note(NONE, variant=variant))
-        elif rng.random() < w.distractor_prob:
-            notes.append(Note(DISTRACTOR, variant=variant))
-        else:
-            s = int(rng.choice(len(w.sources), p=np.asarray(w.source_mix)))
-            correct = rng.random() < w.source_accuracy[s]
-            claim = z if correct else int(rng.choice([c for c in range(k) if c != z]))
-            notes.append(Note(SIGNAL, s, claim, variant))
+        notes.append(draw_note(w, rng, z, variants_per_cell))
     return Scenario(seed, horizon, tuple(regimes), tuple(demands), tuple(notes))
+
+
+def draw_note(w: WorldConfig, rng: np.random.Generator, z: int, variants_per_cell: int = 1_000_000) -> Note:
+    """This week's inbox note given the true regime z (the signal model of docs/spec.md section 2)."""
+    k = len(w.regimes)
+    variant = int(rng.integers(variants_per_cell))
+    if rng.random() >= w.note_prob:
+        return Note(NONE, variant=variant)
+    if rng.random() < w.distractor_prob:
+        return Note(DISTRACTOR, variant=variant)
+    s = int(rng.choice(len(w.sources), p=np.asarray(w.source_mix)))
+    correct = rng.random() < w.source_accuracy[s]
+    claim = z if correct else int(rng.choice([c for c in range(k) if c != z]))
+    return Note(SIGNAL, s, claim, variant)
 
 
 def clip_order(w: WorldConfig, inventory: int, order: int) -> int:

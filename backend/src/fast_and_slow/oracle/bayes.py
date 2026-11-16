@@ -38,7 +38,7 @@ class Tables:
 
     def nearest(self, b: np.ndarray) -> np.ndarray:
         """Nearest grid point(s) by largest-remainder rounding. b: [..., K] -> int indices [...]"""
-        b = _normalize(np.asarray(b, dtype=float))
+        b = _normalize(np.clip(np.asarray(b, dtype=float), 0.0, None))
         scaled = b * self.resolution
         base = np.floor(scaled).astype(int)
         short = self.resolution - base.sum(axis=-1)
