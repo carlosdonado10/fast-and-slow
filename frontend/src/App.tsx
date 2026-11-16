@@ -10,6 +10,7 @@ import { Efficiency } from './components/Efficiency';
 import { HorizonDial } from './components/HorizonDial';
 import { Handoff } from './components/Handoff';
 import { Replays } from './components/Replays';
+import { Transition } from './components/Transition';
 import { Costs, DecisionsLog, Footer, Limitations } from './components/Closing';
 
 export function Report({ report, source }: { report: ReportData; source: string }) {
@@ -58,6 +59,7 @@ export function Report({ report, source }: { report: ReportData; source: string 
             <a href="#desk">The desk</a>
             <a href="#learning">Learning</a>
             <a href="#handoff">Hand-off</a>
+            <a href="#transition">Regime changes</a>
             <a href="#decisions">Decisions</a>
           </nav>
           <a className="pill" href="../../">
@@ -85,6 +87,7 @@ export function Report({ report, source }: { report: ReportData; source: string 
           <HorizonDial report={report} />
           <Handoff report={report} horizon={horizon} onHorizon={setHorizon} />
           <Replays report={report} />
+          <Transition report={report} />
           <Costs report={report} />
           <DecisionsLog report={report} />
           <Limitations report={report} />

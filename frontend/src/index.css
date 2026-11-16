@@ -1739,3 +1739,71 @@ table.tbl {
     stroke: CanvasText;
   }
 }
+
+/* ---------------------------------------------------------------- F11 transition timeline */
+.shift-note {
+  margin: 4px 0 18px;
+  padding: 14px 18px;
+  background: var(--raised);
+  border-left: 2px solid var(--accent);
+  max-width: 72ch;
+}
+.shift-note p {
+  margin: 0;
+}
+.shift-note p + p {
+  margin-top: 8px;
+}
+.muted {
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+}
+.chart .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-top: 10px;
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.outcome {
+  margin: 20px 0 8px;
+  max-width: 72ch;
+}
+.outcome .stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0 0 10px;
+  color: var(--ink-2);
+}
+.outcome .stats b {
+  display: block;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: var(--t-xl);
+  color: var(--ink);
+  line-height: 1.1;
+}
+.detect {
+  margin-top: 28px;
+}
+.detect h3 {
+  margin: 0 0 6px;
+  font-size: var(--t-md);
+  font-weight: 600;
+}
+.detect .tbl {
+  margin-top: 12px;
+}
+.cell-note {
+  display: block;
+  font-weight: 400;
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+}

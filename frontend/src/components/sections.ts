@@ -8,6 +8,7 @@ export const SECTIONS = [
   { id: 'horizon', fid: 'F5', title: 'Horizon dial' },
   { id: 'handoff', fid: 'F6', title: 'Hand-off' },
   { id: 'replays', fid: 'F7', title: 'Decision replays' },
+  { id: 'transition', fid: 'F11', title: 'Regime changes' },
   { id: 'costs', fid: 'F8', title: 'Cost and latency' },
   { id: 'decisions', fid: 'F9', title: 'Decisions log' },
   { id: 'limitations', fid: 'F10', title: 'Limitations' },

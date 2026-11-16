@@ -55,8 +55,9 @@ describe('the report, from the sample JSON', () => {
       expect(within(card).getByText(h.evidence)).toBeInTheDocument();
       expect(within(card).getByText(h.rule)).toBeInTheDocument();
     }
-    expect(within(card).getAllByText('Supported').length).toBe(4);
-    expect(within(card).getByText('Not supported')).toBeInTheDocument();
+    const count = (v: string) => sample.hypotheses.filter((h) => h.verdict === v).length;
+    expect(within(card).getAllByText('Supported').length).toBe(count('supported'));
+    expect(within(card).getAllByText('Not supported').length).toBe(count('not supported'));
   });
 
   it('lets a planner make a call and reveal the hidden truth (F3)', async () => {

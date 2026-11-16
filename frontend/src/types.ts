@@ -197,6 +197,49 @@ export interface DesignDecision {
   rejected: string;
 }
 
+export type Strategy = 'stale' | 'retrain' | 'kev' | 'bridge';
+
+export interface ShiftTimeline {
+  trigger: 'declared' | 'detected';
+  mode: 'sim' | 'live';
+  variant: string;
+  trigger_week: number | null;
+  weekly: Record<Strategy, Num[]>;
+  regret_usd: Record<Strategy, Num>;
+  recover_week: Record<Strategy, number | null>;
+  handback_week: number | null;
+  bridge_saving: Num;
+}
+
+export interface DetectorSummary {
+  threshold: Num;
+  false_alarms_per_100_weeks: Num;
+  detection_rate: Num;
+  median_delay_weeks: Num;
+  delays: (number | null)[];
+}
+
+export interface ShiftResult {
+  label: string;
+  kind: 'announced' | 'silent';
+  declared_note: string;
+  announcement: string | null;
+  weeks: number;
+  shift_week: number;
+  horizon: number;
+  rebuild_weeks: number;
+  live_units: number;
+  recover_at: number;
+  references: Record<string, Num>;
+  kev: { declared: Num; stale_brief: Num };
+  ppo: Record<string, { pre_shift_score: Num; curve: { decisions: number; score: Num }[] }>;
+  detection: Record<
+    string,
+    { matched: DetectorSummary; mean_score_by_week: Num[]; 'at_0.5'?: DetectorSummary }
+  >;
+  timelines: Record<string, ShiftTimeline>;
+}
+
 export interface Report {
   meta: Meta;
   arms: Record<string, ArmInfo>;
@@ -213,4 +256,5 @@ export interface Report {
   features: Feature[];
   decisions: DesignDecision[];
   limitations: string[];
+  shifts?: Record<string, ShiftResult>;
 }

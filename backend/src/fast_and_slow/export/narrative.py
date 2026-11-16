@@ -174,6 +174,14 @@ FEATURES: list[dict[str, str]] = [
         "why": "Every design choice with its reasoning and the alternative rejected.",
     },
     {
+        "id": "F11",
+        "name": "Transition timeline",
+        "user": "Planner, ops lead",
+        "need": "Something changed this week: who decides until the model catches up, and what does the gap cost?",
+        "why": "The question is about time, so the x axis is calendar weeks: a strip per strategy with the shift, the "
+        "bridge's hand-back and the shaded regret, plus how fast each detector would have noticed.",
+    },
+    {
         "id": "F10",
         "name": "Limitations",
         "user": "Everyone",
@@ -224,6 +232,23 @@ DECISIONS: list[dict[str, str]] = [
         "rejected": "Labelling by the model's own confidence, which would make H4 circular.",
     },
     {
+        "decision": "Regime changes measured as a bridge, not a contest (H6)",
+        "why": "The realistic choice after a change isn't Kev or RL forever: it's who decides while retraining catches up.",
+        "rejected": "Comparing stale RL with Kev only, which ignores that companies do retrain.",
+    },
+    {
+        "decision": "One retraining curve, two calendar mappings (rebuilt simulator vs live experience)",
+        "why": "Same warm-started PPO; the modes differ only in how fast new-world experience arrives, so training "
+        "noise can't masquerade as a difference between them.",
+        "rejected": "Two separate trainings.",
+    },
+    {
+        "decision": "An announced shift and a silent one",
+        "why": "Text-readable changes are where a reading model should shine; silent ones test whether it notices "
+        "from numbers, against a statistical detector calibrated to the same false-alarm rate.",
+        "rejected": "Only announced shifts, which would flatter the model.",
+    },
+    {
         "decision": "A static report, no live inference",
         "why": "Cheap on the shared CPU-only lab box, instant to load and reproducible.",
         "rejected": "A live playground: it needs a GPU for little added insight; revisit after the results.",
@@ -236,6 +261,6 @@ LIMITATIONS: list[str] = [
     "Horizons up to 12 weeks. Longer plans could widen or close the multi-step gap.",
     "Regime changes are two stylised shifts at a plan boundary; real changes arrive gradually and mixed.",
     "Live retraining pools 50 identical products; real portfolios are heterogeneous.",
-    "RL budgets are bounded (~25 H100-hours). Kev+RL curves may not have converged.",
+    "RL budgets are bounded (~100 Colab compute units): one Kev+RL seed, at two horizons, and its curves may not have converged.",
     "Notes are generated text. They vary in wording but not in the messiness of real inboxes.",
 ]
