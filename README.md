@@ -41,7 +41,7 @@ uv sync
 uv run fns all --profile smoke
 ```
 
-**The real study** runs on Colab with an A100 (H100s are rarely available, and an A100 has room for Kev-4B): open `notebooks/colab.ipynb` and run the cells from top to bottom. Each stage is resumable and writes to Google Drive.
+**The real study** runs on Colab with an A100 or an L4 (H100s are rarely available; set the matching `GPU` mode in the notebook's first cell): open `notebooks/colab.ipynb` and run the cells from top to bottom. Each stage is resumable and writes to Google Drive.
 
 **The report** is served by its own stack. Runs are stored in MongoDB, never in git: each `fns publish` adds one, and the report opens the newest with a picker for the rest.
 
