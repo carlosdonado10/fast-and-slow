@@ -134,6 +134,11 @@ def test_publish_sends_the_report_to_the_api(
     assert "published run" in ok.output and sent["body"]["label"] == "smoke"
     assert client.get("/api/runs").json()[0]["label"] == "smoke"
 
+    older = ["--commit", "3438254", "--gpu", "NVIDIA A100-SXM4-40GB"]
+    again = CliRunner().invoke(cli, ["publish", *base, "--token", TOKEN, "--report", str(rep), *older])
+    assert again.exit_code == 0, again.output
+    assert sent["body"]["git_commit"] == "3438254" and sent["body"]["gpu"] == "NVIDIA A100-SXM4-40GB"
+
     refused = CliRunner().invoke(cli, ["publish", *base, "--token", "wrong", "--report", str(rep)])
     assert refused.exit_code == 1 and "not published" in refused.output and str(rep) in refused.output
 

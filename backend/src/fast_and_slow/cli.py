@@ -132,8 +132,12 @@ def publish(
     token: str = typer.Option(..., "--token", envvar="UPLOAD_TOKEN", help="the API's upload token (or $UPLOAD_TOKEN)"),
     label: str = typer.Option("", "--label", help="a name for this run in the report's run picker"),
     report: Path | None = ReportFile,
+    commit: str = typer.Option("", "--commit", help="the code that produced the run (default: this checkout's HEAD)"),
+    gpu: str = typer.Option("", "--gpu", help="the GPU it ran on (default: from kev-check's speed.json)"),
 ) -> None:
-    """Publish the report as a new run: the report site lists every run and opens the newest."""
+    """Publish the report as a new run: the report site lists every run and opens the newest.
+
+    An older report.json works as is (--report); pass --commit when it came from different code than this checkout."""
     from .publish import git_commit, gpu_name, post_run
 
     s = _study(profile, runs)
@@ -141,8 +145,8 @@ def publish(
     body = {
         "report": json.loads(path.read_text()),
         "label": label,
-        "git_commit": git_commit(Path(__file__).parent),
-        "gpu": gpu_name(s.root),
+        "git_commit": commit or git_commit(Path(__file__).parent),
+        "gpu": gpu or gpu_name(s.root),
     }
     try:
         run_id = post_run(api, token, body)
