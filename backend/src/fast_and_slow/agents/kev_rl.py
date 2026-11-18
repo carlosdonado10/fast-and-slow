@@ -11,7 +11,7 @@ distribution *is* the policy. So the RL loop is PPO on those logits:
 3. Update: `epochs` passes of clipped-ratio PPO over minibatches, recomputing log-probs with gradients, plus an entropy
    bonus. Adapter and head get separate learning rates.
 
-The trainer is policy-agnostic: the same code trains Kev on an H100 and the fake policy in the tests.
+The trainer is policy-agnostic: the same code trains Kev on a GPU and the fake policy in the tests.
 """
 
 from __future__ import annotations

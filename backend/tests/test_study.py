@@ -192,3 +192,26 @@ def test_h6_verdict_rule(cfg: StudyConfig, tmp_path: Path) -> None:
     assert h6(0.3, 0.6) == "supported"
     assert h6(0.3, 0.02) == "not supported"
     assert h6(0.3, 0.1) == "inconclusive"
+
+
+def test_gpu_time_is_priced_at_the_colab_rate_on_the_gpu_measured(
+    smoke_runs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    import shutil
+
+    from fast_and_slow.config import smoke
+
+    runs, _ = smoke_runs
+    shutil.copytree(runs / "smoke", tmp_path / "smoke")
+    cfg = smoke()
+    cfg.kev.fake = False  # price it as the real GPU arm would be
+    s = Study(cfg, tmp_path)
+    from fast_and_slow.plan import Speed
+
+    Speed(0.03, 0.05, 0.12, "NVIDIA A100-SXM4-40GB").save(s.root / "speed.json")
+    r = CliRunner().invoke(app, ["plan", "--profile", "smoke", "--runs", str(tmp_path), "--cu-per-hour", "10"])
+    assert r.exit_code == 0, r.output
+    assert json.loads((s.root / "rate.json").read_text()) == {"cu_per_hour": 10.0}
+    kev = ReportBuilder(s).costs()["kev_rl"]
+    assert kev["hardware"] == "NVIDIA A100-SXM4-40GB"
+    assert kev["train_usd"] == pytest.approx(kev["train_hours"] * 10 * cfg.eval.usd_per_cu)

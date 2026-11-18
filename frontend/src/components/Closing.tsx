@@ -19,8 +19,8 @@ export function Costs({ report }: { report: Report }) {
         <p>
           For practitioners and buyers making a build-or-buy call. Training cost is paid once per
           horizon and seed; serving cost is paid on every decision. Accuracy sits in the last column
-          so neither is read alone. GPU arms are priced at a stated H100 hourly rate; CPU arms are
-          shown as free to serve, which flatters them only slightly.
+          so neither is read alone. GPU arms are priced at what the GPU cost on Colab, per compute
+          unit; CPU arms are shown as free to serve, which flatters them only slightly.
         </p>
       }
     >

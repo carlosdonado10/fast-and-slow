@@ -139,7 +139,7 @@ Every hypothesis gets a verdict that the export step computes from these numbers
 
 ## 5. Budget (~100 Colab compute units)
 
-The first plan assumed about 25 H100-hours. Colab bills in compute units (CU), and an H100 costs about 15 CU an hour, so 100 CU buys roughly 6–7 H100-hours. **Decision: spend the GPU only where the question needs it, and price everything before spending.**
+The first plan assumed about 25 H100-hours. Colab bills in compute units (CU), and an H100 costs about 15 CU an hour, so 100 CU buys roughly 6–7 H100-hours. In practice H100s are rarely available on Colab, so the study defaults to an A100 (40 GB, about 12 CU an hour, slower per request); `fns plan` reprices everything from the speed `kev-check` measures on whichever GPU you get. **Decision: spend the GPU only where the question needs it, and price everything before spending.**
 
 | Stage | Where | Plan |
 |---|---|---|

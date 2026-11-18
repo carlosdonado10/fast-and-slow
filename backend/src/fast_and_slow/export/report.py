@@ -247,7 +247,12 @@ class ReportBuilder:
 
     def costs(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
-        usd = self.cfg.eval.h100_usd_per_hour
+        e = self.cfg.eval
+        rate = self.s.root / "rate.json"
+        cu_per_hour = json.loads(rate.read_text())["cu_per_hour"] if rate.exists() else e.cu_per_hour
+        usd = cu_per_hour * e.usd_per_cu  # what an hour of the GPU cost on Colab
+        speed = self.s.root / "speed.json"
+        gpu_name = json.loads(speed.read_text())["gpu"] if speed.exists() else "GPU"
         for arm in (*SYSTEM_ONE, *CLASSIC):
             secs, lat = [], []
             for h in self.H:
@@ -263,7 +268,7 @@ class ReportBuilder:
             train_h = sum(secs) / 3600
             p50 = float(np.percentile(lat, 50))
             out[arm] = {
-                "hardware": "H100" if gpu and not self.cfg.kev.fake else "CPU",
+                "hardware": gpu_name if gpu and not self.cfg.kev.fake else "CPU",
                 "train_hours": train_h,
                 "train_usd": train_h * usd if gpu else 0.0,
                 "ms_per_decision_p50": p50,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .config import StudyConfig
 
-# Used only until kev-check has measured the real thing (seconds per request, batched, Kev-4B bf16 on an H100).
+# Used only until kev-check has measured the real thing (seconds per request, batched, Kev-4B bf16; rough guesses).
 GUESS = {"forward_order": 0.020, "forward_both": 0.035, "train_step": 0.090, "gpu": "guess (run kev-check)"}
 FIXED_HOURS = {"setup + model download": 0.15, "note bank (Phi-4-mini)": 0.15}
 

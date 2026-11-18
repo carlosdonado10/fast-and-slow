@@ -40,7 +40,7 @@ uv sync
 uv run fns all --profile smoke --out ../frontend/public/data/report.json
 ```
 
-**The real study** runs on Colab with an H100: open `notebooks/colab.ipynb`, set the repo URL, and run the cells from top to bottom. Each stage is resumable and writes to Google Drive.
+**The real study** runs on Colab with an A100 (H100s are rarely available, and an A100 has room for Kev-4B): open `notebooks/colab.ipynb`, set the repo URL, and run the cells from top to bottom. Each stage is resumable and writes to Google Drive.
 
 **The report:**
 

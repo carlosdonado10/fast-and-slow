@@ -260,6 +260,8 @@ def plan(
 
     s = _study(profile, runs)
     e = s.cfg.eval
+    if cu_per_hour:  # remembered for the report's cost table (GPU time priced at what it actually cost)
+        (s.root / "rate.json").write_text(json.dumps({"cu_per_hour": cu_per_hour}))
     typer.echo(
         render(
             s.cfg,

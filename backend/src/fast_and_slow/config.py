@@ -2,7 +2,7 @@
 
 Two profiles ship with the package:
 - ``smoke``: runs end to end on a laptop in minutes (fake Kev, template notes, tiny budgets).
-- ``full``: the Colab H100 study described in docs/spec.md (~25 H100-hours).
+- ``full``: the Colab GPU study described in docs/spec.md (an A100 by default; priced by `fns plan`).
 
 Every number that shapes the world or the budget lives here, so the report can print the exact config it came from.
 """
@@ -100,9 +100,10 @@ class EvalConfig(BaseModel):
     error_budget: float = 0.05
     efficiency_thresholds: tuple[float, ...] = (80.0, 90.0, 95.0)  # % of optimal, for decisions-to-threshold
     replay_scenarios: int = 3
-    h100_usd_per_hour: float = 3.0
-    # Colab bills compute units (CU). Check the rate for your GPU in Colab's resources panel; ~15/h is an H100 guess.
-    cu_per_hour: float = 15.0
+    # Colab bills compute units (CU). The default GPU is an A100 (H100s are rarely available); ~11.8 CU/h is an
+    # approximate A100 rate: check yours in Colab's resources panel. `fns plan --cu-per-hour` overrides it and saves it.
+    cu_per_hour: float = 11.8
+    usd_per_cu: float = 0.0999  # Colab pay-as-you-go: $9.99 per 100 compute units; GPU time is priced at what it cost
     budget_cu: float = 100.0
 
 
