@@ -81,7 +81,20 @@ def updates_that_fit(cfg: StudyConfig, speed: Speed, budget_hours: float) -> int
     return lo
 
 
-def render(cfg: StudyConfig, speed: Speed, cu_per_hour: float, budget_cu: float, margin: float = 0.8) -> str:
+def sessions_needed(work_hours: float, session_hours: float, setup_hours: float) -> int | None:
+    """Colab sessions to get through work_hours when each one first spends setup_hours reloading. None if none fit."""
+    useful = session_hours - setup_hours
+    return math.ceil(work_hours / useful) if useful > 0 else None
+
+
+def render(
+    cfg: StudyConfig,
+    speed: Speed,
+    cu_per_hour: float,
+    budget_cu: float,
+    margin: float = 0.8,
+    session_cu: float = 0.0,
+) -> str:
     rows = lines(cfg, speed)
     total_h = sum(r.hours for r in rows)
     out = [f"GPU speed: {speed.gpu}  |  {cu_per_hour:g} compute units per hour  |  budget {budget_cu:g} CU", ""]
@@ -105,6 +118,18 @@ def render(cfg: StudyConfig, speed: Speed, cu_per_hour: float, budget_cu: float,
             out.append(f"Set kev.rl_updates to {fit} (now {cfg.kev.rl_updates}) or drop an RL horizon or seed.")
         else:
             out.append("Even 1 RL update doesn't fit: drop RL horizons or seeds, or use more units.")
+    if session_cu > 0:
+        setup = FIXED_HOURS["setup + model download"]
+        session_h = session_cu / cu_per_hour
+        n = sessions_needed(total_h - setup, session_h, setup)
+        if n is None:
+            out.append(f"Sessions of {session_cu:g} CU are too short: setup alone takes {setup * cu_per_hour:.1f} CU.")
+        else:
+            cap = int((session_h - setup) * 60)
+            out.append(
+                f"In sessions of {session_cu:g} CU: about {n}, each paying {setup * cu_per_hour:.1f} CU of setup "
+                f"({(total_h + (n - 1) * setup) * cu_per_hour:.0f} CU in all). Set MAX_MINUTES to {cap}."
+            )
     if math.isclose(speed.forward_order, GUESS["forward_order"]) and speed.gpu == GUESS["gpu"]:  # type: ignore[arg-type]
         out.append("These are guesses. Run `fns kev-check` on the GPU first for measured numbers.")
     return "\n".join(out)

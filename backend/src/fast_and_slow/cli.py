@@ -232,13 +232,22 @@ def plan(
     runs: Path = Runs,
     cu_per_hour: float = typer.Option(0, "--cu-per-hour", help="your GPU's rate from Colab's resources panel"),
     budget: float = typer.Option(0, "--budget", help="compute units you're willing to spend"),
+    session_cu: float = typer.Option(0, "--session-cu", help="compute units you'll spend per Colab session"),
 ) -> None:
     """Estimated GPU hours and Colab compute units per stage, from kev-check's measured speed."""
     from .plan import Speed, render
 
     s = _study(profile, runs)
     e = s.cfg.eval
-    typer.echo(render(s.cfg, Speed.load(s.root / "speed.json"), cu_per_hour or e.cu_per_hour, budget or e.budget_cu))
+    typer.echo(
+        render(
+            s.cfg,
+            Speed.load(s.root / "speed.json"),
+            cu_per_hour or e.cu_per_hour,
+            budget or e.budget_cu,
+            session_cu=session_cu,
+        )
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -11,7 +11,7 @@ from fast_and_slow.agents.policy import FakePolicy
 from fast_and_slow.cli import app
 from fast_and_slow.config import StudyConfig, full
 from fast_and_slow.notes.bank import NoteBank
-from fast_and_slow.plan import GUESS, Speed, lines, render, rl_hours, updates_that_fit
+from fast_and_slow.plan import GUESS, Speed, lines, render, rl_hours, sessions_needed, updates_that_fit
 
 
 def test_rl_cost_grows_with_horizon_and_updates() -> None:
@@ -69,3 +69,12 @@ def test_cli_budget_commands(tmp_path: Path) -> None:
     done = r.invoke(app, ["kev-rl", "--horizon", "1", *base])
     assert "finished" in done.output
     assert r.invoke(app, ["ppo-all", *base]).exit_code == 0
+
+
+def test_sessions_pay_setup_each_time() -> None:
+    assert sessions_needed(2.0, 1.0, 0.15) == 3  # 0.85 h of work per session
+    assert sessions_needed(1.0, 0.1, 0.15) is None
+    cfg = full()
+    text = render(cfg, Speed(**GUESS), 15, 76, session_cu=15)  # type: ignore[arg-type]
+    assert "In sessions of 15 CU" in text and "MAX_MINUTES to 51" in text
+    assert "too short" in render(cfg, Speed(**GUESS), 15, 76, session_cu=1)  # type: ignore[arg-type]
