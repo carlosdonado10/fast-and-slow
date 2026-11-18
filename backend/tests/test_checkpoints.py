@@ -6,6 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import torch
 
 from fast_and_slow.agents.classic_rl import train_ppo
@@ -28,7 +29,8 @@ def test_interrupted_kev_rl_resumes_to_the_same_weights(tmp_path: Path, cfg: Stu
     first = _trainer(cfg, bank, 2)  # the session dies after update 2
     first.train(lambda p: 0.0, checkpoint=ckpt)
     assert json.loads((ckpt / "latest.json").read_text())["folder"] == "u0002"
-    assert [f.name for f in ckpt.glob("u*")] == ["u0002"]  # older checkpoints removed once a newer one is complete
+    # the previous checkpoint stays (in case the newest never fully reaches Drive); older ones are removed
+    assert sorted(f.name for f in ckpt.glob("u*")) == ["u0001", "u0002"]
 
     resumed = _trainer(cfg, bank, 4)  # a new session, same command
     log = resumed.train(lambda p: 0.0, checkpoint=ckpt)
@@ -57,13 +59,71 @@ def test_a_half_written_checkpoint_falls_back_to_the_last_complete_one(
     assert resumed is not None and resumed[0] == 2
 
 
+def test_a_checkpoint_with_a_file_missing_on_drive_falls_back_to_the_previous_one(
+    tmp_path: Path, cfg: StudyConfig, bank: NoteBank, caplog: pytest.LogCaptureFixture
+) -> None:
+    # What Colab did: trainer.json and latest.json reached Drive, the weights file never did.
+    ckpt = tmp_path / "ckpt"
+    _trainer(cfg, bank, 3).train(lambda p: 0.0, checkpoint=ckpt)
+    (ckpt / "u0003" / "policy" / "fake_policy.pt").unlink()
+    t = _trainer(cfg, bank, 4)
+    resumed = t.load_checkpoint(ckpt)
+    assert resumed is not None and resumed[0] == 2
+    assert "u0003 is incomplete" in caplog.text
+    assert KevRLTrainer._complete_checkpoint(ckpt) == ckpt / "u0002"
+
+
+def test_a_partly_uploaded_file_does_not_count(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
+    ckpt = tmp_path / "ckpt"
+    _trainer(cfg, bank, 3).train(lambda p: 0.0, checkpoint=ckpt)
+    opt = ckpt / "u0003" / "optimizer.pt"
+    opt.write_bytes(opt.read_bytes()[:10])  # shorter than trainer.json says
+    resumed = _trainer(cfg, bank, 4).load_checkpoint(ckpt)
+    assert resumed is not None and resumed[0] == 2
+
+
+def test_an_old_format_folder_without_its_weights_is_skipped(
+    tmp_path: Path, cfg: StudyConfig, bank: NoteBank, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The checkpoint that broke the H12 run: written before trainer.json listed its files, weights never uploaded.
+    ckpt = tmp_path / "ckpt"
+    _trainer(cfg, bank, 1).train(lambda p: 0.0, checkpoint=ckpt)
+    shutil.rmtree(ckpt / "u0001")
+    folder = ckpt / "u0003"
+    (folder / "policy").mkdir(parents=True)
+    (folder / "trainer.json").write_text(json.dumps({"update": 3}))
+    (folder / "optimizer.pt").write_bytes(b"x")
+    (ckpt / "latest.json").write_text(json.dumps({"folder": "u0003", "update": 3}))
+    t = _trainer(cfg, bank, 2)
+    assert t.load_checkpoint(ckpt) is None
+    assert "starting this run from update 0" in caplog.text
+    log = t.train(lambda p: 0.0, checkpoint=ckpt)  # trains from scratch instead of crashing
+    assert len([u for u in log.updates if "update" in u and "event" not in u]) == 2
+
+
+def test_an_unreadable_checkpoint_tries_the_one_before(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
+    ckpt = tmp_path / "ckpt"
+    _trainer(cfg, bank, 3).train(lambda p: 0.0, checkpoint=ckpt)
+    for name in ("u0003", "u0002"):  # right size, garbage inside
+        w = ckpt / name / "policy" / "fake_policy.pt"
+        if name == "u0003":
+            w.write_bytes(b"\0" * w.stat().st_size)
+    resumed = _trainer(cfg, bank, 4).load_checkpoint(ckpt)
+    assert resumed is not None and resumed[0] == 2
+    w = ckpt / "u0002" / "policy" / "fake_policy.pt"
+    w.write_bytes(b"\0" * w.stat().st_size)
+    with pytest.raises(RuntimeError, match="could be read"):
+        _trainer(cfg, bank, 4).load_checkpoint(ckpt)
+
+
 def test_checkpoints_in_the_old_layout_still_resume(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
     ckpt = tmp_path / "ckpt"
     _trainer(cfg, bank, 2).train(lambda p: 0.0, checkpoint=ckpt)
     folder = ckpt / json.loads((ckpt / "latest.json").read_text())["folder"]
     for item in folder.iterdir():  # rebuild the pre-folder layout: files directly in the checkpoint directory
         shutil.move(str(item), str(ckpt / item.name))
-    shutil.rmtree(folder)
+    for f in ckpt.glob("u*"):
+        shutil.rmtree(f)
     (ckpt / "latest.json").unlink()
     t = _trainer(cfg, bank, 4)
     log = t.train(lambda p: 0.0, checkpoint=ckpt)

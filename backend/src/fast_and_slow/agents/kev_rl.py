@@ -16,6 +16,7 @@ The trainer is policy-agnostic: the same code trains Kev on a GPU and the fake p
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -43,6 +44,29 @@ def _write_synced(path: Path, text: str) -> None:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
+
+
+def _fsync(path: Path) -> None:
+    with path.open("rb+") as f:
+        os.fsync(f.fileno())
+
+
+def _is_complete(folder: Path) -> bool:
+    """trainer.json is written last and lists every other file with its size; all must be there at that size.
+    Checkpoints from before the list existed are checked for their files being present and non-empty."""
+    try:
+        state = json.loads((folder / "trainer.json").read_text())
+    except (OSError, ValueError):
+        return False
+    files = state.get("files") if isinstance(state, dict) else None
+    if files is None:  # written before the file list existed: at least every file must be there and non-empty
+        weights = [f for f in (folder / "policy").glob("*") if f.is_file()]
+        needed = [*weights, folder / "optimizer.pt"]
+        return bool(weights) and all(f.exists() and f.stat().st_size > 0 for f in needed)
+    try:
+        return all((folder / name).stat().st_size == size for name, size in files.items())
+    except OSError:
+        return False
 
 
 EvalFn = Callable[[DecisionPolicy], float]  # returns % of optimal on the held-out set
@@ -179,62 +203,92 @@ class KevRLTrainer:
     def save_checkpoint(self, path: Path, update: int, log: RLLog) -> None:
         """Everything needed to continue exactly where we stopped.
 
-        Built for Google Drive's mount, where renaming a folder is unreliable and uploads finish after the write returns:
-        each save goes into a new folder (`u0012/`), its `trainer.json` is written last (a folder without it is
-        incomplete and ignored), then `latest.json` points at it. The previous checkpoint is deleted only after that,
-        so at every moment at least one complete checkpoint exists."""
+        Built for Google Drive's mount, where renaming a folder is unreliable and each file uploads on its own, after
+        the write returns (a small file can reach Drive while a large one is still uploading, or never does if the
+        runtime is deleted first). So:
+        - each save goes into a new folder (`u0012/`) and its `trainer.json`, written last, lists every other file in
+          the folder with its size: a folder counts only if all of them are there at full size;
+        - `latest.json` then points at it;
+        - the previous checkpoint is kept, and older ones deleted, so if the newest never fully reaches Drive the
+          next session resumes from the one before (which had a whole save interval to upload)."""
         path.mkdir(parents=True, exist_ok=True)
         folder = path / f"u{update:04d}"
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir()
         self.policy.save(folder / "policy")
         torch.save({"opt": self.opt.state_dict()}, folder / "optimizer.pt")
+        files = {}
+        for f in sorted(x for x in folder.rglob("*") if x.is_file()):
+            _fsync(f)
+            files[f.relative_to(folder).as_posix()] = f.stat().st_size
         state = {
             "update": update,
             "decisions": self.decisions,
             "seconds": self.seconds,
             "rng": self.rng.bit_generator.state,
             "log": {"points": log.points, "updates": log.updates},
+            "files": files,
         }
         _write_synced(folder / "trainer.json", json.dumps(state))
         _write_synced(path / "latest.json", json.dumps({"folder": folder.name, "update": update}))
+
+        previous = [f for f in self._candidates(path) if f not in (folder, path) and _is_complete(f)][:1]
         for old in path.glob("u*"):
-            if old.is_dir() and old != folder:
+            if old.is_dir() and old != folder and old not in previous:
                 shutil.rmtree(old, ignore_errors=True)
-        for legacy in ("policy", "optimizer.pt", "trainer.json"):  # the pre-folder layout, now superseded
-            target = path / legacy
-            if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
-            elif target.exists():
-                target.unlink()
+        if previous:  # the pre-folder layout goes only once two newer checkpoints exist
+            for legacy in ("policy", "optimizer.pt", "trainer.json"):
+                target = path / legacy
+                if target.is_dir():
+                    shutil.rmtree(target, ignore_errors=True)
+                elif target.exists():
+                    target.unlink()
+
+    @staticmethod
+    def _candidates(path: Path) -> list[Path]:
+        """Checkpoint folders, newest first: latest.json's, then every u*/ folder, then the pre-folder layout."""
+        out: list[Path] = []
+        pointer = path / "latest.json"
+        if pointer.exists():
+            with contextlib.suppress(ValueError, KeyError, TypeError):
+                out.append(path / json.loads(pointer.read_text())["folder"])
+        out += sorted((f for f in path.glob("u*") if f.is_dir()), reverse=True)
+        if (path / "trainer.json").exists():
+            out.append(path)
+        return list(dict.fromkeys(out))
 
     @staticmethod
     def _complete_checkpoint(path: Path) -> Path | None:
-        """The newest complete checkpoint folder: latest.json's if it is complete, else the highest complete u*/
-        folder, else the pre-folder layout (checkpoints written before this format)."""
-        pointer = path / "latest.json"
-        if pointer.exists():
-            try:
-                folder = path / json.loads(pointer.read_text())["folder"]
-            except (ValueError, KeyError):
-                folder = None
-            if folder is not None and (folder / "trainer.json").exists():
-                return folder
-        done = sorted(f for f in path.glob("u*") if (f / "trainer.json").exists())
-        if done:
-            return done[-1]
-        return path if (path / "trainer.json").exists() else None
+        """The newest checkpoint folder whose files all arrived (see save_checkpoint), or None."""
+        return next((f for f in KevRLTrainer._candidates(path) if _is_complete(f)), None)
 
     def load_checkpoint(self, path: Path) -> tuple[int, RLLog] | None:
-        folder = self._complete_checkpoint(path)
-        if folder is None:
-            return None
-        state = json.loads((folder / "trainer.json").read_text())
-        self.policy.load(folder / "policy")
-        self.opt.load_state_dict(torch.load(folder / "optimizer.pt", weights_only=False)["opt"])
-        self.rng.bit_generator.state = state["rng"]
-        self.decisions, self.seconds = int(state["decisions"]), float(state["seconds"])
-        return int(state["update"]), RLLog(state["log"]["points"], state["log"]["updates"])
+        candidates = self._candidates(path)
+        complete = [f for f in candidates if _is_complete(f)]
+        for bad in candidates[: candidates.index(complete[0])] if complete else candidates:
+            log_.warning(
+                "checkpoint %s is incomplete (files missing or partly uploaded on Drive); skipping it", bad.name
+            )
+        errors = []
+        for folder in complete:
+            try:
+                state = json.loads((folder / "trainer.json").read_text())
+                self.policy.load(folder / "policy")
+                self.opt.load_state_dict(torch.load(folder / "optimizer.pt", weights_only=False)["opt"])
+            except Exception as e:  # a file that has the right size but can't be read: try the one before
+                log_.warning("checkpoint %s could not be read (%s); trying an older one", folder.name, e)
+                errors.append(e)
+                continue
+            self.rng.bit_generator.state = state["rng"]
+            self.decisions, self.seconds = int(state["decisions"]), float(state["seconds"])
+            return int(state["update"]), RLLog(state["log"]["points"], state["log"]["updates"])
+        if errors:  # weights may be half-loaded: training on from here would be neither fresh nor resumed
+            raise RuntimeError(f"no checkpoint in {path} could be read; delete the folder to start over") from errors[
+                -1
+            ]
+        if candidates:
+            log_.warning("no complete checkpoint in %s: starting this run from update 0", path)
+        return None
 
     # ------------------------------------------------------------ loop
     def train(
