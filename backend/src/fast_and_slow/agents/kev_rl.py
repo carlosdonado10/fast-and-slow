@@ -28,6 +28,8 @@ import torch
 
 from ..config import KevConfig, WorldConfig
 from ..notes.bank import NoteBank
+from ..progress import Progress, fmt_duration
+from ..progress import log as log_
 from ..sim.desk import Episode
 from ..sim.render import ORDER_Q, request
 from ..sim.world import sample_scenario
@@ -194,6 +196,7 @@ class KevRLTrainer:
         on_point: Callable[[RLLog], None] | None = None,
         checkpoint: Path | None = None,
         deadline: float | None = None,
+        label: str = "kev_rl",
     ) -> RLLog:
         """deadline: a time.monotonic() value. When an update finishes past it, save a checkpoint and stop (paused)."""
         resumed = self.load_checkpoint(checkpoint) if checkpoint else None
@@ -206,6 +209,9 @@ class KevRLTrainer:
             log.points.append({"decisions": 0, "score": evaluate(self.policy), "seconds": 0.0})
             if on_point:
                 on_point(log)
+        prog = Progress(label, self.cfg.rl_updates, "updates", every=0, done=start)
+        if deadline is not None:
+            log_.info("%s: will pause at a checkpoint after %s", label, fmt_duration(deadline - time.monotonic()))
         for u in range(start + 1, self.cfg.rl_updates + 1):
             t0 = time.perf_counter()
             batch = self.rollout()
@@ -213,12 +219,17 @@ class KevRLTrainer:
             self.seconds += time.perf_counter() - t0
             mean_ret = float(np.mean([s.reward for s in batch])) / self.cfg.rl_reward_scale * self.H
             log.updates.append({"update": u, "decisions": self.decisions, "mean_return": mean_ret, **stats})
+            note = f"mean return {'-' if mean_ret < 0 else ''}${abs(mean_ret):,.0f}"
             if u % self.cfg.eval_every_updates == 0 or u == self.cfg.rl_updates:
                 log.points.append(
                     {"decisions": self.decisions, "score": evaluate(self.policy), "seconds": self.seconds}
                 )
+                note += f", held-out score {log.points[-1]['score']:.1f}% of optimal"
                 if on_point:
                     on_point(log)
+            if deadline is not None and u < self.cfg.rl_updates:
+                note += f", pauses in {fmt_duration(deadline - time.monotonic())}"
+            prog.update(u, note)
             out_of_time = deadline is not None and time.monotonic() >= deadline and u < self.cfg.rl_updates
             if checkpoint and (u % self.cfg.checkpoint_every_updates == 0 or u == self.cfg.rl_updates or out_of_time):
                 self.save_checkpoint(checkpoint, u, log)

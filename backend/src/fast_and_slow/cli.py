@@ -154,8 +154,11 @@ def status(profile: str = Profile, runs: Path = Runs) -> None:
         rows += [(f"{arm} H{h}", s.root / "evals" / arm / f"H{h}" / "seed0.json") for h in c.eval.horizons]
     for h, seed in s.kev_rl_runs():
         ck = s.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}" / "trainer.json"
-        tag = f"  (checkpoint at update {json.loads(ck.read_text())['update']})" if ck.exists() else ""
-        rows.append((f"kev_rl H{h} seed{seed}{tag}", s.root / "evals" / "kev_rl" / f"H{h}" / f"seed{seed}.json"))
+        out = s.root / "evals" / "kev_rl" / f"H{h}" / f"seed{seed}.json"
+        tag = ""
+        if ck.exists() and not out.exists():
+            tag = f"  (paused at update {json.loads(ck.read_text())['update']}/{c.kev.rl_updates})"
+        rows.append((f"kev_rl H{h} seed{seed}{tag}", out))
     for v, h, seed in s.ppo_runs():
         rows.append((f"ppo_{v} H{h} seed{seed}", s.root / "evals" / f"ppo_{v}" / f"H{h}" / f"seed{seed}.json"))
     for n in c.shift.shifts:
@@ -182,6 +185,7 @@ def kev_check(profile: str = Profile, runs: Path = Runs, batch: int = typer.Opti
 
     s = _study(profile, runs)
     w = s.cfg.world
+    typer.echo("kev-check 1/4: loading Kev-4B (the first time downloads about 8 GB)")
     t0 = time.perf_counter()
     pol = s.policy(fresh=True)
     typer.echo(f"loaded {pol.name} in {time.perf_counter() - t0:.1f}s")
@@ -203,7 +207,9 @@ def kev_check(profile: str = Profile, runs: Path = Runs, batch: int = typer.Opti
             torch.cuda.synchronize()
         return (time.perf_counter() - t) / repeat / len(reqs)
 
+    typer.echo(f"kev-check 2/4: timing {len(reqs)} requests with both questions")
     both = timed(lambda: pol.score(reqs))
+    typer.echo("kev-check 3/4: timing the order question alone")
     order = timed(lambda: pol.score(order_only))
 
     def step() -> None:
@@ -211,6 +217,7 @@ def kev_check(profile: str = Profile, runs: Path = Runs, batch: int = typer.Opti
         loss = torch.stack([-torch.log_softmax(z[ORDER_Q].float(), -1)[0] for z in zs]).mean()
         loss.backward()  # type: ignore[no-untyped-call]
 
+    typer.echo("kev-check 4/4: timing a training step and checking gradients reach the adapter")
     train = timed(step)
     grads = sum(p.grad is not None for g in pol.param_groups() for p in g["params"])
     if not grads:

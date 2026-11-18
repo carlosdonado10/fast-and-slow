@@ -23,6 +23,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 
 from ..config import WorldConfig
 from ..notes.bank import NoteBank
+from ..progress import Progress
 from ..sim.desk import Episode, Observation
 from ..sim.world import sample_scenario
 from .base import Agent, Decision
@@ -103,8 +104,10 @@ class _CurveCallback(BaseCallback):
         on_checkpoint: Callable[[int], None],
         save_every: int = 0,
         on_save: Callable[[], None] | None = None,
+        progress: Progress | None = None,
     ):
         super().__init__()
+        self.progress = progress
         self.pending = list(checkpoints)
         self.on_checkpoint, self.save_every, self.on_save = on_checkpoint, save_every, on_save
         self.last_save = 0
@@ -116,6 +119,8 @@ class _CurveCallback(BaseCallback):
         if self.on_save and self.save_every and self.num_timesteps - self.last_save >= self.save_every:
             self.last_save = self.num_timesteps
             self.on_save()
+        if self.progress:
+            self.progress.update(self.num_timesteps)
         return True
 
 
@@ -139,6 +144,7 @@ def train_ppo(
     checkpoint: Path | None = None,
     save_every: int = 25_000,
     init: Path | None = None,
+    label: str = "",
 ) -> tuple[PPO, list[dict[str, float]]]:
     """Train PPO and return the model and its learning curve [{decisions, score, seconds}].
 
@@ -208,11 +214,13 @@ def train_ppo(
     done = int(model.num_timesteps)
     if done < total_decisions:
         pending = [c for c in log_checkpoints(total_decisions, eval_points) if c > done]
+        prog = Progress(label or name, total_decisions, "decisions", done=done)
         model.learn(
             total_timesteps=total_decisions - done,
             reset_num_timesteps=False,
-            callback=_CurveCallback(pending, point, save_every, save),
+            callback=_CurveCallback(pending, point, save_every, save, prog),
         )
+        prog.update(total_decisions, f"held-out score {curve[-1]['score']:.1f}% of optimal")
     if curve[-1]["decisions"] < model.num_timesteps:
         point(int(model.num_timesteps))
     return model, curve

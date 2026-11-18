@@ -65,7 +65,7 @@ def test_cli_budget_commands(tmp_path: Path) -> None:
     paused = r.invoke(app, ["kev-rl", "--horizon", "1", "--max-minutes", "0.00001", *base])
     assert paused.exit_code == 0 and "paused" in paused.output
     st = r.invoke(app, ["status", *base])
-    assert "checkpoint at update" in st.output
+    assert "paused at update" in st.output
     done = r.invoke(app, ["kev-rl", "--horizon", "1", *base])
     assert "finished" in done.output
     assert r.invoke(app, ["ppo-all", *base]).exit_code == 0

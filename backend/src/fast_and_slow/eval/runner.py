@@ -18,6 +18,7 @@ from ..agents.baselines import bayes_belief
 from ..config import OracleConfig, WorldConfig
 from ..notes.bank import NoteBank
 from ..oracle.bayes import BayesPlanner, PerfectInfoPlanner, is_decidable
+from ..progress import Progress
 from ..sim.desk import Episode
 from ..sim.world import Scenario, sample_scenario
 
@@ -85,8 +86,11 @@ def evaluate(
     labeller: Labeller,
     split: str = "test",
     record: bool = True,
+    label: str | None = None,
 ) -> EvalResult:
+    """label: print progress lines under this name (for the long, final evaluations; curve evals stay quiet)."""
     started = time.perf_counter()
+    prog = Progress(label, sum(sc.horizon for sc in scenarios), "decisions") if label else None
     eps = [Episode(world, sc, bank.texts(sc, split)) for sc in scenarios]
     agent.begin(scenarios)
     recs: list[DecisionRecord] = []
@@ -98,6 +102,8 @@ def evaluate(
         t0 = time.perf_counter()
         decisions = agent.act_batch(obs, live)
         per = (time.perf_counter() - t0) * 1000 / len(live)
+        if prog:
+            prog.advance(len(live))
         for i, o, d in zip(live, obs, decisions, strict=True):
             out = eps[i].step(world.order_menu[d.action])
             if record:

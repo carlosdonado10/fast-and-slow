@@ -138,7 +138,7 @@ class Study:
                 BayesAgent(w, h, self.cfg.oracle),
                 OracleAgent(w, h),
             ]
-            results = {a.name: evaluate(a, w, self.bank, sc, lab) for a in arms}
+            results = {a.name: evaluate(a, w, self.bank, sc, lab, label=f"refs H{h} {a.name}") for a in arms}
             bs = arms[1]
             assert isinstance(bs, BaseStockAgent)
             self._write(
@@ -165,7 +165,7 @@ class Study:
             ctx = icl_context(w, self.bank, h, k.icl_examples) if arm == "kev_icl" else None
             agent = KevAgent(arm, w, self.policy(), context=ctx)
             t0 = time.perf_counter()
-            res = evaluate(agent, w, self.bank, self.scenarios(h), self.labeller(h))
+            res = evaluate(agent, w, self.bank, self.scenarios(h), self.labeller(h), label=f"{arm} H{h}")
             seconds = time.perf_counter() - t0
             self._write(p, res.to_json())
             refs = self.refs(h)
@@ -186,6 +186,8 @@ class Study:
         if p.exists() and not force:
             return True
         w = self.cfg.world
+        name = f"kev_rl H{h} seed{seed}"
+        log.info("%s: loading Kev and scoring the reference arms for the learning curve", name)
         policy = self.policy(fresh=True)  # every run starts from the released weights
         scorer = self.curve_scorer(h)
         curve_path = self.path("curves", "kev_rl", f"H{h}", f"seed{seed}.json")
@@ -201,6 +203,7 @@ class Study:
             on_point=lambda lg: self._write(curve_path, {"points": lg.points, "updates": lg.updates}),
             checkpoint=self.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}",
             deadline=time.monotonic() + max_minutes * 60 if max_minutes else None,
+            label=name,
         )
         if rl_log.paused:
             log.info(
@@ -210,7 +213,9 @@ class Study:
             return False
         self._write(curve_path, {"points": rl_log.points, "updates": rl_log.updates, "train_seconds": trainer.seconds})
         policy.save(self.root / "weights" / "kev_rl" / f"H{h}" / f"seed{seed}")
-        res = evaluate(KevAgent("kev_rl", w, policy), w, self.bank, self.scenarios(h), self.labeller(h))
+        res = evaluate(
+            KevAgent("kev_rl", w, policy), w, self.bank, self.scenarios(h), self.labeller(h), label=f"{name} final eval"
+        )
         self._write(p, res.to_json())
         self._policy = None  # the next arm reloads clean weights
         return True
@@ -237,9 +242,17 @@ class Study:
             seed=seed,
             checkpoint=self.root / "checkpoints" / arm / f"H{h}" / f"seed{seed}",
             save_every=c.checkpoint_every_decisions,
+            label=f"{arm} H{h} seed{seed}",
         )
         self._write(self.path("curves", arm, f"H{h}", f"seed{seed}.json"), {"points": curve})
-        res = evaluate(PPOAgent(arm, w, model, variant, emb), w, self.bank, self.scenarios(h), self.labeller(h))
+        res = evaluate(
+            PPOAgent(arm, w, model, variant, emb),
+            w,
+            self.bank,
+            self.scenarios(h),
+            self.labeller(h),
+            label=f"{arm} H{h} seed{seed} final eval",
+        )
         self._write(p, res.to_json())
 
     # ------------------------------------------------------------ loading results

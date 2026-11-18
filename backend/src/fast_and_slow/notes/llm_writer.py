@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from ..config import NotesConfig, WorldConfig
+from ..progress import Progress
 from .bank import NoteBank, cell_spec, split_cells
 
 SOURCE_BRIEF = {
@@ -65,7 +66,11 @@ def write(world: WorldConfig, cfg: NotesConfig, batch: int = 12, max_rounds: int
 
     raw: dict[str, list[str]] = {}
     specs = cell_spec(world)
-    for _ in range(max_rounds):
+    prog = Progress("notes (Phi-4-mini)", len(specs) * cfg.per_cell, "notes", every=0)
+    for r in range(max_rounds):
+        prog.update(
+            sum(min(len(set(raw.get(c, []))), cfg.per_cell) for c in specs), f"round {r + 1} of up to {max_rounds}"
+        )
         todo = [c for c in specs if len(set(raw.get(c, []))) < cfg.per_cell]
         if not todo:
             break
@@ -81,6 +86,7 @@ def write(world: WorldConfig, cfg: NotesConfig, batch: int = 12, max_rounds: int
             notes = [n for n in _parse(text) if 20 <= len(n) <= 280]
             raw.setdefault(c, []).extend(notes)
     raw = {c: list(dict.fromkeys(v))[: cfg.per_cell] for c, v in raw.items()}
+    prog.update(sum(len(v) for v in raw.values()), force=True)
     short = {c: len(v) for c, v in raw.items() if len(v) < cfg.per_cell // 2}
     if short:
         raise RuntimeError(f"note writer produced too few notes for {short}; raise max_rounds")

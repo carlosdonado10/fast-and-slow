@@ -23,6 +23,7 @@ from .agents.kev_agent import KevAgent
 from .eval import detect as D
 from .eval.metrics import pct_of_optimal
 from .eval.runner import Labeller, eval_scenarios, evaluate
+from .progress import Progress
 from .sim.render import CHANGE_Q, change_question, request
 from .sim.shifts import get
 from .study import Study
@@ -59,11 +60,11 @@ class ShiftStudy:
     def _read(self, name: str) -> Any:
         return json.loads((self.dir / name).read_text())
 
-    def scorer(self) -> Callable[[Agent], float]:
+    def scorer(self) -> Callable[..., float]:
         refs = self.refs()
 
-        def score(agent: Agent) -> float:
-            r = evaluate(agent, self.new, self.s.bank, self.scenarios(), self.labeller, record=False)
+        def score(agent: Agent, label: str | None = None) -> float:
+            r = evaluate(agent, self.new, self.s.bank, self.scenarios(), self.labeller, record=False, label=label)
             return pct_of_optimal(float(np.mean(r.returns)), refs["random"], refs["bayes"])
 
         return score
@@ -79,7 +80,17 @@ class ShiftStudy:
             ]
             mean = {
                 a.name: float(
-                    np.mean(evaluate(a, self.new, self.s.bank, self.scenarios(), self.labeller, record=False).returns)
+                    np.mean(
+                        evaluate(
+                            a,
+                            self.new,
+                            self.s.bank,
+                            self.scenarios(),
+                            self.labeller,
+                            record=False,
+                            label=f"shift {self.shift.name} refs {a.name}",
+                        ).returns
+                    )
                 )
                 for a in arms
             }
@@ -115,6 +126,7 @@ class ShiftStudy:
             checkpoint=self.dir / f"ckpt_ppo_{variant}",
             save_every=cls.checkpoint_every_decisions,
             init=init,
+            label=f"shift {self.shift.name} ppo_{variant} retrain",
         )
         self._write(out, {"pre_shift_score": pre, "points": curve})
 
@@ -123,8 +135,12 @@ class ShiftStudy:
             return
         pol = self.s.policy()
         score = self.scorer()
-        told = score(KevAgent("kev_declared", self.new, pol, context=self.shift.declared_note, ask_regime=False))
-        not_told = score(KevAgent("kev_stale_brief", self.old, pol, ask_regime=False))
+        tag = f"shift {self.shift.name} kev"
+        told = score(
+            KevAgent("kev_declared", self.new, pol, context=self.shift.declared_note, ask_regime=False),
+            f"{tag} (told about the change)",
+        )
+        not_told = score(KevAgent("kev_stale_brief", self.old, pol, ask_regime=False), f"{tag} (not told)")
         self._write("kev.json", {"declared": told, "stale_brief": not_told})
 
     def detect(self, force: bool = False) -> None:
@@ -152,7 +168,7 @@ class ShiftStudy:
         test = streams(c.detect_streams, STREAM_SEEDS, True)
         out: dict[str, Any] = {"weeks": c.weeks, "shift_week": c.shift_week}
         for name, fn in (("kev", self._kev_scores), ("page_hinkley", self._ph_scores)):
-            cal_scores, test_scores = fn(calib), fn(test)
+            cal_scores, test_scores = fn(calib, "calibration years"), fn(test, "test years")
             thr = D.calibrate(cal_scores, c.false_alarm_target)
             out[name] = {
                 "matched": D.summarise(test_scores, test, thr),
@@ -162,7 +178,7 @@ class ShiftStudy:
                 out[name]["at_0.5"] = D.summarise(test_scores, test, 0.5)
         self._write("detect.json", out)
 
-    def _kev_scores(self, streams: list[D.Stream]) -> list[list[float]]:
+    def _kev_scores(self, streams: list[D.Stream], what: str = "") -> list[list[float]]:
         pol = self.s.policy()
         reqs = []
         for st in streams:
@@ -171,13 +187,16 @@ class ShiftStudy:
                 r["questions"] = {CHANGE_Q: change_question()}
                 reqs.append(r)
         probs: list[float] = []
+        prog = Progress(f"shift {self.shift.name} kev alarm, {what}".rstrip(", "), len(reqs), "weeks")
         for i in range(0, len(reqs), 32):
+            prog.update(i)
             for z in pol.score(reqs[i : i + 32]):
                 probs.append(float(torch.softmax(z[CHANGE_Q].float(), -1)[1]))
+        prog.update(len(reqs))
         weeks = self.c.weeks
         return [probs[k * weeks : (k + 1) * weeks] for k in range(len(streams))]
 
-    def _ph_scores(self, streams: list[D.Stream]) -> list[list[float]]:
+    def _ph_scores(self, streams: list[D.Stream], what: str = "") -> list[list[float]]:
         return [D.page_hinkley(self.old, st) for st in streams]
 
     # ------------------------------------------------------------ for the export
