@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 import torch
@@ -25,8 +27,8 @@ def test_interrupted_kev_rl_resumes_to_the_same_weights(tmp_path: Path, cfg: Stu
     ckpt = tmp_path / "ckpt"
     first = _trainer(cfg, bank, 2)  # the session dies after update 2
     first.train(lambda p: 0.0, checkpoint=ckpt)
-    assert (ckpt / "trainer.json").exists()
-    assert not ckpt.with_name("ckpt.tmp").exists() and not ckpt.with_name("ckpt.old").exists()
+    assert json.loads((ckpt / "latest.json").read_text())["folder"] == "u0002"
+    assert [f.name for f in ckpt.glob("u*")] == ["u0002"]  # older checkpoints removed once a newer one is complete
 
     resumed = _trainer(cfg, bank, 4)  # a new session, same command
     log = resumed.train(lambda p: 0.0, checkpoint=ckpt)
@@ -34,6 +36,39 @@ def test_interrupted_kev_rl_resumes_to_the_same_weights(tmp_path: Path, cfg: Stu
     assert torch.equal(resumed.policy.state_proj, straight.policy.state_proj)  # type: ignore[attr-defined]
     assert any(u.get("event", "").startswith("resumed from update 2") for u in log.updates)  # type: ignore[attr-defined]
     assert [p["decisions"] for p in log.points] == [0, straight.decisions // 2, straight.decisions]
+
+
+def test_a_half_written_checkpoint_falls_back_to_the_last_complete_one(
+    tmp_path: Path, cfg: StudyConfig, bank: NoteBank
+) -> None:
+    ckpt = tmp_path / "ckpt"
+    _trainer(cfg, bank, 2).train(lambda p: 0.0, checkpoint=ckpt)
+    # the next save got as far as its folder before the session died: no trainer.json, latest.json not yet moved
+    (ckpt / "u0003" / "policy").mkdir(parents=True)
+    t = _trainer(cfg, bank, 4)
+    resumed = t.load_checkpoint(ckpt)
+    assert resumed is not None and resumed[0] == 2
+    # a lost or garbled pointer: the highest complete folder still wins
+    (ckpt / "latest.json").write_text("{not json")
+    resumed = _trainer(cfg, bank, 4).load_checkpoint(ckpt)
+    assert resumed is not None and resumed[0] == 2
+    (ckpt / "latest.json").unlink()
+    resumed = _trainer(cfg, bank, 4).load_checkpoint(ckpt)
+    assert resumed is not None and resumed[0] == 2
+
+
+def test_checkpoints_in_the_old_layout_still_resume(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:
+    ckpt = tmp_path / "ckpt"
+    _trainer(cfg, bank, 2).train(lambda p: 0.0, checkpoint=ckpt)
+    folder = ckpt / json.loads((ckpt / "latest.json").read_text())["folder"]
+    for item in folder.iterdir():  # rebuild the pre-folder layout: files directly in the checkpoint directory
+        shutil.move(str(item), str(ckpt / item.name))
+    shutil.rmtree(folder)
+    (ckpt / "latest.json").unlink()
+    t = _trainer(cfg, bank, 4)
+    log = t.train(lambda p: 0.0, checkpoint=ckpt)
+    assert any(u.get("event", "").startswith("resumed from update 2") for u in log.updates)  # type: ignore[attr-defined]
+    assert (ckpt / "latest.json").exists() and not (ckpt / "trainer.json").exists()  # migrated on the next save
 
 
 def test_a_missing_checkpoint_starts_fresh(tmp_path: Path, cfg: StudyConfig, bank: NoteBank) -> None:

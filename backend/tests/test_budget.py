@@ -47,7 +47,7 @@ def test_deadline_pauses_at_a_checkpoint_and_resumes(tmp_path: Path, cfg: StudyC
     ckpt = tmp_path / "ck"
     t = KevRLTrainer(cfg.world, bank, 2, FakePolicy(seed=1), k, seed=3)
     log = t.train(lambda p: 0.0, checkpoint=ckpt, deadline=0.0)  # already out of time: stop after one update
-    assert log.paused and (ckpt / "trainer.json").exists()
+    assert log.paused and KevRLTrainer._complete_checkpoint(ckpt) is not None
     t2 = KevRLTrainer(cfg.world, bank, 2, FakePolicy(seed=1), k, seed=3)
     log2 = t2.train(lambda p: 0.0, checkpoint=ckpt)
     assert not log2.paused and len([u for u in log2.updates if "loss" in u]) == 4

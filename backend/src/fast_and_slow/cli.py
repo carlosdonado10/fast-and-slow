@@ -184,6 +184,8 @@ def run_all(
 @app.command()
 def status(profile: str = Profile, runs: Path = Runs) -> None:
     """What's done and what's left (Colab sessions disconnect; every stage resumes from here)."""
+    from .agents.kev_rl import KevRLTrainer
+
     s = _study(profile, runs)
     c = s.cfg
     rows = [("notes", s.root / "notes" / "bank.json")]
@@ -191,11 +193,11 @@ def status(profile: str = Profile, runs: Path = Runs) -> None:
     for arm in ("kev_zero", "kev_icl"):
         rows += [(f"{arm} H{h}", s.root / "evals" / arm / f"H{h}" / "seed0.json") for h in c.eval.horizons]
     for h, seed in s.kev_rl_runs():
-        ck = s.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}" / "trainer.json"
+        ck = KevRLTrainer._complete_checkpoint(s.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}")
         out = s.root / "evals" / "kev_rl" / f"H{h}" / f"seed{seed}.json"
         tag = ""
-        if ck.exists() and not out.exists():
-            tag = f"  (paused at update {json.loads(ck.read_text())['update']}/{c.kev.rl_updates})"
+        if ck is not None and not out.exists():
+            tag = f"  (paused at update {json.loads((ck / 'trainer.json').read_text())['update']}/{c.kev.rl_updates})"
         rows.append((f"kev_rl H{h} seed{seed}{tag}", out))
     for v, h, seed in s.ppo_runs():
         rows.append((f"ppo_{v} H{h} seed{seed}", s.root / "evals" / f"ppo_{v}" / f"H{h}" / f"seed{seed}.json"))

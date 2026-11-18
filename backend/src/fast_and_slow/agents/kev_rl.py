@@ -17,6 +17,7 @@ The trainer is policy-agnostic: the same code trains Kev on a GPU and the fake p
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from collections.abc import Callable
@@ -34,6 +35,15 @@ from ..sim.desk import Episode
 from ..sim.render import ORDER_Q, request
 from ..sim.world import sample_scenario
 from .policy import DecisionPolicy
+
+
+def _write_synced(path: Path, text: str) -> None:
+    """Write and fsync, so the file is complete on disk before anything that depends on it is written."""
+    with path.open("w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+
 
 EvalFn = Callable[[DecisionPolicy], float]  # returns % of optimal on the held-out set
 
@@ -167,13 +177,18 @@ class KevRLTrainer:
 
     # ------------------------------------------------------------ checkpoints
     def save_checkpoint(self, path: Path, update: int, log: RLLog) -> None:
-        """Everything needed to continue exactly where we stopped. Written to a temp dir, then swapped in, so a
-        disconnect mid-write never leaves a half checkpoint behind."""
-        tmp, old = path.with_name(path.name + ".tmp"), path.with_name(path.name + ".old")
-        shutil.rmtree(tmp, ignore_errors=True)
-        tmp.mkdir(parents=True)
-        self.policy.save(tmp / "policy")
-        torch.save({"opt": self.opt.state_dict()}, tmp / "optimizer.pt")
+        """Everything needed to continue exactly where we stopped.
+
+        Built for Google Drive's mount, where renaming a folder is unreliable and uploads finish after the write returns:
+        each save goes into a new folder (`u0012/`), its `trainer.json` is written last (a folder without it is
+        incomplete and ignored), then `latest.json` points at it. The previous checkpoint is deleted only after that,
+        so at every moment at least one complete checkpoint exists."""
+        path.mkdir(parents=True, exist_ok=True)
+        folder = path / f"u{update:04d}"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir()
+        self.policy.save(folder / "policy")
+        torch.save({"opt": self.opt.state_dict()}, folder / "optimizer.pt")
         state = {
             "update": update,
             "decisions": self.decisions,
@@ -181,19 +196,42 @@ class KevRLTrainer:
             "rng": self.rng.bit_generator.state,
             "log": {"points": log.points, "updates": log.updates},
         }
-        (tmp / "trainer.json").write_text(json.dumps(state))
-        if path.exists():
-            shutil.rmtree(old, ignore_errors=True)
-            path.rename(old)
-        tmp.rename(path)
-        shutil.rmtree(old, ignore_errors=True)
+        _write_synced(folder / "trainer.json", json.dumps(state))
+        _write_synced(path / "latest.json", json.dumps({"folder": folder.name, "update": update}))
+        for old in path.glob("u*"):
+            if old.is_dir() and old != folder:
+                shutil.rmtree(old, ignore_errors=True)
+        for legacy in ("policy", "optimizer.pt", "trainer.json"):  # the pre-folder layout, now superseded
+            target = path / legacy
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink()
+
+    @staticmethod
+    def _complete_checkpoint(path: Path) -> Path | None:
+        """The newest complete checkpoint folder: latest.json's if it is complete, else the highest complete u*/
+        folder, else the pre-folder layout (checkpoints written before this format)."""
+        pointer = path / "latest.json"
+        if pointer.exists():
+            try:
+                folder = path / json.loads(pointer.read_text())["folder"]
+            except (ValueError, KeyError):
+                folder = None
+            if folder is not None and (folder / "trainer.json").exists():
+                return folder
+        done = sorted(f for f in path.glob("u*") if (f / "trainer.json").exists())
+        if done:
+            return done[-1]
+        return path if (path / "trainer.json").exists() else None
 
     def load_checkpoint(self, path: Path) -> tuple[int, RLLog] | None:
-        if not (path / "trainer.json").exists():
+        folder = self._complete_checkpoint(path)
+        if folder is None:
             return None
-        state = json.loads((path / "trainer.json").read_text())
-        self.policy.load(path / "policy")
-        self.opt.load_state_dict(torch.load(path / "optimizer.pt", weights_only=False)["opt"])
+        state = json.loads((folder / "trainer.json").read_text())
+        self.policy.load(folder / "policy")
+        self.opt.load_state_dict(torch.load(folder / "optimizer.pt", weights_only=False)["opt"])
         self.rng.bit_generator.state = state["rng"]
         self.decisions, self.seconds = int(state["decisions"]), float(state["seconds"])
         return int(state["update"]), RLLog(state["log"]["points"], state["log"]["updates"])
