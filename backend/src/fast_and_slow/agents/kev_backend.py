@@ -46,9 +46,9 @@ class KevPolicy:
             self.model.lm.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
             from transformers.modeling_layers import GradientCheckpointingLayer
 
-            for m in self.model.lm.modules():
-                if isinstance(m, GradientCheckpointingLayer):
-                    m.training = True  # this layer only (not .train(), which would recurse into LoRA dropout)
+            self.layers = [m for m in self.model.lm.modules() if isinstance(m, GradientCheckpointingLayer)]
+        else:
+            self.layers = []
 
     def _record(self, req: Request) -> tuple[dict[str, Any], list[str]]:
         from kev.data import materialize
@@ -73,6 +73,8 @@ class KevPolicy:
             return [z for i in range(0, len(requests), self.chunk) for z in self.score(requests[i : i + self.chunk])]
         recs = [self._record(r) for r in requests]
         encs = [self.model.encode(self.tok, rec) for rec, _ in recs]
+        for m in self.layers:  # checkpoint only in gradient passes; inference runs the plain eval path
+            m.training = grad  # this layer only (not .train(), which would recurse into LoRA dropout)
         with torch.set_grad_enabled(grad):
             logits = self.model.forward_batch(encs)
         return [
