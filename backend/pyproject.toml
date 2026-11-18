@@ -36,7 +36,17 @@ gpu = [
 fns = "fast_and_slow.cli:app"
 
 [dependency-groups]
+# The runs API (FastAPI + MongoDB). A group, not an extra, so its Docker image installs just these (no torch).
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "pymongo>=4.10",
+    "pydantic>=2.9",
+]
 dev = [
+    { include-group = "api" },
+    "httpx>=0.28",
+    "mongomock>=4.3",
     "black>=26.10.1",
     "detect-secrets>=1.5.0",
     "mypy>=2.4.1",
@@ -70,7 +80,7 @@ warn_return_any = false  # numpy's stubs return Any from most reductions; flaggi
 plugins = ["pydantic.mypy"]
 # libraries without type information, used only behind narrow adapters
 [[tool.mypy.overrides]]
-module = ["kev.*", "stable_baselines3.*", "gymnasium.*", "transformers.*", "sentence_transformers.*", "peft.*"]
+module = ["kev.*", "stable_baselines3.*", "gymnasium.*", "transformers.*", "sentence_transformers.*", "peft.*", "mongomock.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

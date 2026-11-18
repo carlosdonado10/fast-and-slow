@@ -20,7 +20,7 @@ import {
   noteSourceLabel,
   replayArms,
 } from './replay';
-import { loadReport } from './load';
+import { loadRun, NoRunsYet, runFromUrl } from './load';
 import { spreadLabels, xLayout } from './layout';
 
 describe('arms', () => {
@@ -321,48 +321,75 @@ describe('layout', () => {
   });
 });
 
-describe('loadReport', () => {
-  const ok = (body: unknown) =>
-    Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);
+describe('loadRun', () => {
   const report = { meta: {}, results: {}, hypotheses: [] };
+  const run = { id: 'r1', label: 'A100 run', report };
+  const res = (status: number, body?: unknown) =>
+    Promise.resolve({
+      ok: status < 400,
+      status,
+      json: () =>
+        body === undefined ? Promise.reject(new SyntaxError('<')) : Promise.resolve(body),
+    } as Response);
+  const routes =
+    (map: Record<string, () => Promise<Response>>) =>
+    (url: string): Promise<Response> =>
+      (map[url] ?? (() => res(500, {})))();
 
-  it('prefers the real report', async () => {
-    const f = vi.fn(() => ok(report));
-    await expect(loadReport(f as unknown as typeof fetch)).resolves.toMatchObject({
-      source: 'data/report.json',
-    });
-    expect(f).toHaveBeenCalledTimes(1);
-  });
-
-  it('falls back to the sample when the real report is missing or not JSON', async () => {
-    const f = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, status: 404 })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(report) });
-    await expect(loadReport(f as unknown as typeof fetch)).resolves.toMatchObject({
-      source: 'data/report.sample.json',
-    });
-
-    const g = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
-      })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(report) });
-    await expect(loadReport(g as unknown as typeof fetch)).resolves.toMatchObject({
-      source: 'data/report.sample.json',
-    });
-  });
-
-  it('explains every failure when nothing loads', async () => {
-    const f = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ nope: 1 }) })
-      .mockRejectedValueOnce('offline');
-    await expect(loadReport(f as unknown as typeof fetch)).rejects.toThrow(
-      /data\/report.json: not a report file; data\/report.sample.json: offline/,
+  it('opens the newest run and lists every run', async () => {
+    const f = vi.fn(
+      routes({ 'api/runs/latest': () => res(200, run), 'api/runs': () => res(200, [run]) }),
     );
+    const out = await loadRun(null, f as unknown as typeof fetch);
+    expect(out.run.id).toBe('r1');
+    expect(out.runs).toHaveLength(1);
+  });
+
+  it('opens a named run, escaping its id', async () => {
+    const f = vi.fn(
+      routes({ 'api/runs/a%2Fb': () => res(200, run), 'api/runs': () => res(200, {}) }),
+    );
+    const out = await loadRun('a/b', f as unknown as typeof fetch);
+    expect(out.run.label).toBe('A100 run');
+    expect(out.runs).toEqual([]);
+  });
+
+  it('tells an empty store apart from a missing run', async () => {
+    const none = vi.fn(
+      routes({ 'api/runs/latest': () => res(404, {}), 'api/runs': () => res(200, []) }),
+    );
+    await expect(loadRun(null, none as unknown as typeof fetch)).rejects.toBeInstanceOf(NoRunsYet);
+    const gone = vi.fn(
+      routes({ 'api/runs/x': () => res(404, {}), 'api/runs': () => res(200, []) }),
+    );
+    await expect(loadRun('x', gone as unknown as typeof fetch)).rejects.toThrow(/no run "x"/);
+  });
+
+  it('explains API failures in plain words', async () => {
+    const down = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(loadRun(null, down as unknown as typeof fetch)).rejects.toThrow(
+      /Couldn't reach the runs API.*Failed to fetch/,
+    );
+    const err = vi.fn(
+      routes({ 'api/runs/latest': () => res(503, {}), 'api/runs': () => res(200, []) }),
+    );
+    await expect(loadRun(null, err as unknown as typeof fetch)).rejects.toThrow(/HTTP 503/);
+    const html = vi.fn(
+      routes({ 'api/runs/latest': () => res(200), 'api/runs': () => res(200, []) }),
+    );
+    await expect(loadRun(null, html as unknown as typeof fetch)).rejects.toThrow(
+      /didn't return JSON/,
+    );
+    const odd = vi.fn(
+      routes({ 'api/runs/latest': () => res(200, { id: 'r' }), 'api/runs': () => res(200, []) }),
+    );
+    await expect(loadRun(null, odd as unknown as typeof fetch)).rejects.toThrow(
+      /didn't return a report/,
+    );
+  });
+
+  it('reads the run from the address bar', () => {
+    expect(runFromUrl('?run=2026-11-18T0200-ab12')).toBe('2026-11-18T0200-ab12');
+    expect(runFromUrl('')).toBeNull();
   });
 });

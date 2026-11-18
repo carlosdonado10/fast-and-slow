@@ -7,13 +7,13 @@ import { Report } from './App';
 import type { Report as ReportData } from './types';
 
 const sample = JSON.parse(
-  readFileSync(resolve(__dirname, '../public/data/report.sample.json'), 'utf8'),
+  readFileSync(resolve(__dirname, './test/fixtures/report.sample.json'), 'utf8'),
 ) as ReportData;
 
 describe('regime changes (F11)', () => {
   it('switches shift, trigger and retraining mode and updates the story', async () => {
     const user = userEvent.setup();
-    render(<Report report={structuredClone(sample)} source="sample" />);
+    render(<Report report={structuredClone(sample)} />);
     const sec = document.getElementById('transition')!;
     expect(within(sec).getByText(/An email lands in the inbox/)).toBeInTheDocument();
     expect(
@@ -35,7 +35,7 @@ describe('regime changes (F11)', () => {
   it('says so when there are no regime-change results', () => {
     const r = structuredClone(sample);
     delete r.shifts;
-    render(<Report report={r} source="sample" />);
+    render(<Report report={r} />);
     expect(
       within(document.getElementById('transition')!).getByText('No regime-change results yet.'),
     ).toBeInTheDocument();
@@ -50,7 +50,7 @@ describe('regime changes (F11)', () => {
       tl.bridge_saving = null;
     }
     shift.detection = {};
-    render(<Report report={r} source="sample" />);
+    render(<Report report={r} />);
     const sec = document.getElementById('transition')!;
     expect(within(sec).getByText(/Nobody notices the change/)).toBeInTheDocument();
     expect(within(sec).getByText(/never beats the bridge/)).toBeInTheDocument();

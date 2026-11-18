@@ -258,3 +258,19 @@ export interface Report {
   limitations: string[];
   shifts?: Record<string, ShiftResult>;
 }
+
+/** One published run, as listed by GET /api/runs (backend/src/fast_and_slow/store.py). */
+export interface RunSummary {
+  id: string;
+  label: string;
+  created_at: string;
+  profile: string;
+  git_commit: string;
+  gpu: string;
+  verdicts: Record<string, string>;
+}
+
+/** A run with its report: GET /api/runs/latest or /api/runs/{id}. */
+export interface Run extends RunSummary {
+  report: Report;
+}

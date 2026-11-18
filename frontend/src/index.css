@@ -300,6 +300,46 @@ select {
   text-decoration: underline;
 }
 
+/* Which run of the study is on screen: a published run, picked from every run so far. */
+.runbar {
+  display: flex;
+  align-items: baseline;
+  gap: 8px 24px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule);
+}
+.runbar-pick {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.runbar-pick span {
+  color: var(--ink);
+  font-weight: 600;
+}
+.runbar select {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 2px 4px;
+  max-width: min(100%, 52ch);
+}
+.runbar select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.runbar-meta {
+  margin: 0;
+}
+.state code {
+  font-size: 0.95em;
+}
+
 /* ------------------------------------------------------------------ hero (F1) */
 .hero {
   padding: clamp(48px, 9vw, 120px) 0 clamp(40px, 6vw, 72px);

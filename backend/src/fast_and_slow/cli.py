@@ -5,7 +5,8 @@ fns refs       --profile full          # Bayes / oracle / base-stock / random re
 fns kev        --profile full          # Kev zero-shot + in-context evaluations
 fns kev-rl     --profile full --horizon 4 --seed 0
 fns ppo        --profile full --variant emb --horizon 4 --seed 0
-fns export     --profile full --out ../frontend/public/data/report.json
+fns export     --profile full          # build report.json (runs/<profile>/report.json)
+fns publish    --profile full --api https://.../api --label "first A100 run"   # store it as a new run
 fns all        --profile smoke         # everything, in order (laptop smoke test)
 """
 
@@ -26,7 +27,8 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 Profile = typer.Option("smoke", "--profile", "-p", help="smoke | full | path to a YAML override")
 Runs = typer.Option(Path("runs"), "--runs", help="where outputs go (a Drive folder on Colab)")
 Force = typer.Option(False, "--force", help="redo work that already has outputs")
-Out = typer.Option(Path("../frontend/public/data/report.json"), "--out", help="where report.json goes")
+ReportFile = typer.Option(None, "--report", help="an existing report.json (default: export one now)")
+Out = typer.Option(None, "--out", help="where report.json goes (default: runs/<profile>/report.json)")
 
 
 def _study(profile: str, runs: Path) -> Study:
@@ -113,17 +115,48 @@ def ppo_all(profile: str = Profile, runs: Path = Runs, force: bool = Force) -> N
 def export(
     profile: str = Profile,
     runs: Path = Runs,
-    out: Path = Out,
+    out: Path | None = Out,
 ) -> None:
-    """Build report.json for the frontend."""
-    typer.echo(export_report(_study(profile, runs), out))
+    """Build report.json (reports are published as runs with `fns publish`, never committed)."""
+    s = _study(profile, runs)
+    typer.echo(export_report(s, out or s.root / "report.json"))
+
+
+@app.command()
+def publish(
+    profile: str = Profile,
+    runs: Path = Runs,
+    api: str = typer.Option(
+        ..., "--api", envvar="FNS_API", help="the runs API, e.g. https://example.org/p/fast-and-slow/api"
+    ),
+    token: str = typer.Option(..., "--token", envvar="UPLOAD_TOKEN", help="the API's upload token (or $UPLOAD_TOKEN)"),
+    label: str = typer.Option("", "--label", help="a name for this run in the report's run picker"),
+    report: Path | None = ReportFile,
+) -> None:
+    """Publish the report as a new run: the report site lists every run and opens the newest."""
+    from .publish import git_commit, gpu_name, post_run
+
+    s = _study(profile, runs)
+    path = report or export_report(s, s.root / "report.json")
+    body = {
+        "report": json.loads(path.read_text()),
+        "label": label,
+        "git_commit": git_commit(Path(__file__).parent),
+        "gpu": gpu_name(s.root),
+    }
+    try:
+        run_id = post_run(api, token, body)
+    except RuntimeError as e:
+        typer.echo(f"not published: {e}\nThe report is still saved at {path}; run this again when the API is up.")
+        raise typer.Exit(code=1) from e
+    typer.echo(f"published run {run_id}")
 
 
 @app.command("all")
 def run_all(
     profile: str = Profile,
     runs: Path = Runs,
-    out: Path = Out,
+    out: Path | None = Out,
     force: bool = Force,
 ) -> None:
     """Every stage in order. Meant for the smoke profile; on Colab the notebook runs stages one by one."""
@@ -141,7 +174,7 @@ def run_all(
     for n in s.cfg.shift.shifts:
         run_shift(s, n, "cpu", force)
         run_shift(s, n, "gpu", force)
-    typer.echo(export_report(s, out))
+    typer.echo(export_report(s, out or s.root / "report.json"))
 
 
 @app.command()

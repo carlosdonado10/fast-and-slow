@@ -43,8 +43,8 @@ repos:
       - id: forbid-model-weights
         name: forbid model weights and run outputs
         language: fail
-        entry: "weights, checkpoints and run outputs live in runs/ or Google Drive, not git"
-        files: \.(safetensors|bin|pt|pth|ckpt|gguf|onnx|npz|parquet)$|(^|/)runs/
+        entry: "weights, checkpoints, run outputs and reports live in runs/, Google Drive or the runs API (fns publish), not git"
+        files: \.(safetensors|bin|pt|pth|ckpt|gguf|onnx|npz|parquet)$|(^|/)runs/|(^|/)report\.json$|^frontend/public/data/
 
       - id: black
         name: black

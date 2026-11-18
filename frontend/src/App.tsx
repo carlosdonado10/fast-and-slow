@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { Report as ReportData } from './types';
-import { loadReport, type Loaded } from './lib/load';
+import type { Report as ReportData, Run, RunSummary } from './types';
+import { loadRun, NoRunsYet, runFromUrl, type Loaded } from './lib/load';
+import { RunPicker } from './components/RunPicker';
 import { LEARNERS, sortArms } from './lib/arms';
 import { Hero } from './components/Hero';
 import { Scorecard } from './components/Scorecard';
@@ -13,7 +14,17 @@ import { Replays } from './components/Replays';
 import { Transition } from './components/Transition';
 import { Costs, DecisionsLog, Footer, Limitations } from './components/Closing';
 
-export function Report({ report, source }: { report: ReportData; source: string }) {
+export function Report({
+  report,
+  run,
+  runs = [],
+  onPick,
+}: {
+  report: ReportData;
+  run?: Run;
+  runs?: RunSummary[];
+  onPick?: (id: string) => void;
+}) {
   const horizons = report.meta.horizons.map(String);
   // One horizon and one set of visible arms, shared by every chart that has them.
   const [horizon, setHorizon] = useState(horizons[horizons.length > 1 ? 1 : 0] ?? '1');
@@ -66,6 +77,7 @@ export function Report({ report, source }: { report: ReportData; source: string 
             Back to the portfolio
           </a>
         </div>
+        {run && onPick && <RunPicker run={run} runs={runs} onPick={onPick} />}
         <Hero report={report} />
         <main id="main">
           <Scorecard report={report} />
@@ -92,29 +104,58 @@ export function Report({ report, source }: { report: ReportData; source: string 
           <DecisionsLog report={report} />
           <Limitations report={report} />
         </main>
-        <Footer report={report} source={source} />
+        <Footer report={report} runId={run?.id ?? 'not published'} />
       </div>
     </>
   );
 }
 
-export default function App({ load = loadReport }: { load?: () => Promise<Loaded> }) {
-  const [state, setState] = useState<
-    { kind: 'loading' } | { kind: 'ready'; data: Loaded } | { kind: 'error'; message: string }
-  >({ kind: 'loading' });
+type State =
+  | { kind: 'loading' }
+  | { kind: 'ready'; data: Loaded }
+  | { kind: 'empty' }
+  | { kind: 'error'; message: string };
+
+export default function App({
+  load = loadRun,
+}: {
+  load?: (runId: string | null) => Promise<Loaded>;
+}) {
+  const [runId, setRunId] = useState<string | null>(() => runFromUrl());
+  const [state, setState] = useState<State>({ kind: 'loading' });
 
   useEffect(() => {
     let live = true;
-    load()
+    load(runId)
       .then((data) => live && setState({ kind: 'ready', data }))
-      .catch(
-        (e: unknown) =>
-          live && setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) }),
-      );
+      .catch((e: unknown) => {
+        if (!live) return;
+        if (e instanceof NoRunsYet) setState({ kind: 'empty' });
+        else setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      });
     return () => {
       live = false;
     };
-  }, [load]);
+  }, [load, runId]);
+
+  // Back and forward move between runs the way they move between pages.
+  useEffect(() => {
+    const onPop = () => {
+      setState({ kind: 'loading' });
+      setRunId(runFromUrl());
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const pick = (id: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('run', id);
+    url.hash = '';
+    window.history.pushState(null, '', url);
+    setState({ kind: 'loading' });
+    setRunId(id);
+  };
 
   if (state.kind === 'loading') {
     return (
@@ -123,18 +164,33 @@ export default function App({ load = loadReport }: { load?: () => Promise<Loaded
       </div>
     );
   }
-  if (state.kind === 'error') {
+  if (state.kind === 'empty') {
     return (
-      <div className="state" role="alert">
+      <div className="state" role="status">
         <div>
-          <p>The report data didn't load.</p>
-          <p>{state.message}</p>
+          <p>No runs have been published yet.</p>
           <p>
-            Export it with the backend's export stage into public/data/report.json, then reload.
+            Run the study, then publish it as a run with <code>fns publish</code> (section 7 of the
+            Colab notebook). The newest run opens here.
           </p>
         </div>
       </div>
     );
   }
-  return <Report report={state.data.report} source={state.data.source} />;
+  if (state.kind === 'error') {
+    return (
+      <div className="state" role="alert">
+        <div>
+          <p>The report didn't load.</p>
+          <p>{state.message}</p>
+          <p>
+            The report reads its runs from the API. Locally, start it with{' '}
+            <code>docker compose up</code> in the repository, then reload.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  const { run, runs } = state.data;
+  return <Report key={run.id} report={run.report} run={run} runs={runs} onPick={pick} />;
 }

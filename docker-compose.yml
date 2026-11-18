@@ -1,0 +1,45 @@
+# The report stack: the React report, the runs API and MongoDB.
+#   cp .env.example .env   (set MONGO_PASSWORD and UPLOAD_TOKEN)
+#   docker compose up -d --build      -> http://localhost:8088
+# MongoDB has no published port: only the API reaches it, over the compose network. Runs persist in the mongo-data
+# volume across `down`/`up` (only `down -v` deletes them).
+name: fast-and-slow
+
+services:
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-fns}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD in .env (see .env.example)}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER:-fns}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_DB: fast_and_slow
+      UPLOAD_TOKEN: ${UPLOAD_TOKEN:-}
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8088}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

@@ -1,20 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App, { Report } from './App';
+import { NoRunsYet } from './lib/load';
 import type { Report as ReportData } from './types';
 import { SECTIONS } from './components/sections';
 
 const sample = JSON.parse(
-  readFileSync(resolve(__dirname, '../public/data/report.sample.json'), 'utf8'),
+  readFileSync(resolve(__dirname, './test/fixtures/report.sample.json'), 'utf8'),
 ) as ReportData;
 
 const clone = (): ReportData => structuredClone(sample);
 
 function renderReport(data: ReportData = clone()) {
-  return render(<Report report={data} source="data/report.sample.json" />);
+  return render(<Report report={data} />);
 }
 
 describe('the report, from the sample JSON', () => {
@@ -205,17 +206,80 @@ describe('null and missing data', () => {
   });
 });
 
-describe('loading', () => {
-  it('shows a loading state, then the report', async () => {
-    render(<App load={() => Promise.resolve({ report: clone(), source: 'x.json' })} />);
+describe('loading runs', () => {
+  const summary = (id: string, label: string) => ({
+    id,
+    label,
+    created_at: '2026-11-18T02:15:00+00:00',
+    profile: 'full',
+    git_commit: 'abc1234',
+    gpu: 'NVIDIA A100-SXM4-40GB',
+    verdicts: {},
+  });
+  const runs = [summary('new', 'Second A100 run'), summary('old', 'First A100 run')];
+  const loader = vi.fn((id: string | null) =>
+    Promise.resolve({ run: { ...summary(id ?? 'new', 'x'), report: clone() }, runs }),
+  );
+
+  it('shows a loading state, then the newest run with its provenance', async () => {
+    window.history.replaceState(null, '', '/');
+    render(<App load={loader} />);
     expect(screen.getByRole('status')).toHaveTextContent('Loading the report');
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(loader).toHaveBeenLastCalledWith(null);
+    expect(screen.getByText(/trained on NVIDIA A100-SXM4-40GB/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'abc1234' })).toHaveAttribute(
+      'href',
+      'https://github.com/carlosdonado10/fast-and-slow/commit/abc1234',
+    );
+    expect(screen.getByText(/2 runs published/)).toBeInTheDocument();
+  });
+
+  it('switches runs from the picker, keeps it in the address, and follows back', async () => {
+    window.history.replaceState(null, '', '/');
+    render(<App load={loader} />);
+    const picker = await screen.findByRole('combobox', { name: 'Showing run' });
+    await userEvent.selectOptions(picker, 'old');
+    expect(window.location.search).toBe('?run=old');
+    await waitFor(() => expect(loader).toHaveBeenLastCalledWith('old'));
+    await screen.findByRole('combobox', { name: 'Showing run' });
+    window.history.replaceState(null, '', '/?run=new');
+    fireEvent.popState(window);
+    await waitFor(() => expect(loader).toHaveBeenLastCalledWith('new'));
+  });
+
+  it('lists the open run even when the list leaves it out', async () => {
+    window.history.replaceState(null, '', '/?run=lonely');
+    render(
+      <App
+        load={(id) =>
+          Promise.resolve({
+            run: { ...summary(id!, 'Lonely run'), gpu: '', git_commit: '', report: clone() },
+            runs: [],
+          })
+        }
+      />,
+    );
+    expect(await screen.findByRole('option', { name: /Lonely run/ })).toBeInTheDocument();
+    expect(screen.getByText(/The only run so far/)).toBeInTheDocument();
+  });
+
+  it('says how to publish when there are no runs yet', async () => {
+    render(<App load={() => Promise.reject(new NoRunsYet())} />);
+    expect(await screen.findByText('No runs have been published yet.')).toBeInTheDocument();
+    expect(screen.getByText(/fns publish/)).toBeInTheDocument();
   });
 
   it('explains how to fix a failed load', async () => {
-    render(<App load={() => Promise.reject(new Error('Tried data/report.json: HTTP 404'))} />);
+    render(
+      <App
+        load={() =>
+          Promise.reject(new Error('The runs API answered api/runs/latest with HTTP 503.'))
+        }
+      />,
+    );
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('HTTP 404');
-    expect(alert).toHaveTextContent('public/data/report.json');
+    expect(alert).toHaveTextContent('HTTP 503');
+    expect(alert).toHaveTextContent('docker compose up');
   });
 });

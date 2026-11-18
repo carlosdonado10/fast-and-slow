@@ -179,7 +179,14 @@ Each feature: **who it's for → what need it serves → why it is built this wa
 | F9 | **Decisions log**: every design choice in this spec, with reasoning and the alternative rejected | Hiring manager | "How does this person think?" | This is the PM artifact; the study is the excuse |
 | F10 | **Limitations** | Everyone | Honesty | Synthetic world, one product, one model family, a small horizon. Saying so is part of being credible |
 
-**Format decision:** a static, precomputed report (React reads a `report.json` exported by the backend). No live inference. **Why:** it's cheap to host on the shared lab box (CPU-only, one stack at a time), loads instantly, and is reproducible. A live playground would need a GPU or a slow CPU Kev for little added insight. Revisit once the results are in.
+**Format decision:** a precomputed report (React renders a report exported by the backend). No live inference. **Why:** it's cheap to host on the shared lab box (CPU-only, one stack at a time), loads instantly, and is reproducible. A live playground would need a GPU or a slow CPU Kev for little added insight. Revisit once the results are in.
+
+**Storage decision: published runs in MongoDB, behind a small API; reports are never committed.** Each `fns publish` adds one run: the report plus what produced it (label, date, git commit, GPU). The report site opens the newest run, lists every run in a picker, and keeps the chosen run in the address (`?run=<id>`), so a link opens the same run.
+- **Why not commit report.json:** results would change with every rerun, the repo would carry generated data, and comparing two runs would mean digging through git history. A rerun on Colab should add a run, not overwrite one.
+- **Why a document store:** a run is one nested JSON document, read whole and never queried inside; the list view needs a small summary per run, which a projection serves without loading reports. MongoDB fits that shape exactly, and runs are append-only.
+- **Why an API in between:** a browser can't hold database credentials. The FastAPI service serves reads publicly and accepts a publish only with a bearer token. MongoDB has no published port: only the API reaches it, over the compose network.
+- **Why Docker Compose:** the lab runs every project as its own compose stack under `/p/<id>/`, so this one ships `mongo` + `api` + `web` (nginx serving the build and forwarding `/api`). Runs live in a named volume and survive `down`/`up`.
+- **The trade-off:** publishing from Colab needs the stack online. When it isn't, the report stays on Drive and is published later from a laptop against the local stack.
 
 ---
 
@@ -197,10 +204,13 @@ fast-and-slow/
       agents/                baselines, Kev (zero-shot / in-context / RL), classic PPO (num / emb / sig)
       eval/                  fixed scenario sets, evaluation runner, metrics
       export/                runs/ → report.json (+ hypothesis verdicts)
+      store.py, api.py       published runs in MongoDB; FastAPI read API + token-protected publish
+      publish.py             `fns publish`: send a report to the API as a new run
       cli.py                 `fns <stage>` entry points used by the notebook
     tests/                   pytest; fast and offline (a fake Kev model)
   notebooks/colab.ipynb      THE entry point: clone, uv sync, pick a profile, run stages, sync to Drive
-  frontend/                  Vite + React + TypeScript report; reads public/data/report.json
+  frontend/                  Vite + React + TypeScript report; reads runs from the API (nginx in its image)
+  docker-compose.yml         the report stack: web (nginx + build) -> api (FastAPI) -> mongo
 ```
 
 - **Python with uv:** `uv sync` (CPU) or `uv sync --extra gpu` (Kev, transformers). Kev is installed from Git at the `kev-1.0` tag, because PyPI's `kev` is an unrelated package.

@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   base: './',
   plugins: [react()],
+  // `pnpm dev` reads runs from the local stack (`docker compose up`), which serves the API on :8088.
+  server: { proxy: { '/api': process.env.FNS_API_ORIGIN ?? 'http://localhost:8088' } },
   test: {
     environment: 'jsdom',
     globals: true,

@@ -27,7 +27,8 @@ Each verdict is computed by the export step from rules written down before the r
 docs/spec.md            the use case, feature map and decisions log
 backend/                Python (uv) package `fast_and_slow`: simulator, exact Bayes planner, agents, RL, metrics, export
 notebooks/colab.ipynb   the single entry point for the GPU study (thin: one CLI call per cell)
-frontend/               React + Vite report that reads report.json
+frontend/               React + Vite report; reads published runs from the API
+docker-compose.yml      the report stack: web (nginx) -> api (FastAPI) -> MongoDB
 ```
 
 ## Run it
@@ -37,18 +38,28 @@ frontend/               React + Vite report that reads report.json
 ```bash
 cd backend
 uv sync
-uv run fns all --profile smoke --out ../frontend/public/data/report.json
+uv run fns all --profile smoke
 ```
 
-**The real study** runs on Colab with an A100 (H100s are rarely available, and an A100 has room for Kev-4B): open `notebooks/colab.ipynb`, set the repo URL, and run the cells from top to bottom. Each stage is resumable and writes to Google Drive.
+**The real study** runs on Colab with an A100 (H100s are rarely available, and an A100 has room for Kev-4B): open `notebooks/colab.ipynb` and run the cells from top to bottom. Each stage is resumable and writes to Google Drive.
 
-**The report:**
+**The report** is served by its own stack. Runs are stored in MongoDB, never in git: each `fns publish` adds one, and the report opens the newest with a picker for the rest.
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev
+cp .env.example .env                 # set MONGO_PASSWORD and UPLOAD_TOKEN
+docker compose up -d --build         # the report at http://localhost:8088
+cd backend && set -a && . ../.env && set +a
+uv run fns all --profile smoke       # or use a real report from Drive with --report
+uv run fns publish --profile smoke --api http://localhost:8088/api --label "smoke test"
 ```
+
+| Service | What it does |
+|---|---|
+| `web` | nginx serving the React build, forwarding `/api` to the API |
+| `api` | FastAPI: public reads (`GET /api/runs`, `/api/runs/latest`, `/api/runs/{id}`), token-protected `POST /api/runs`; docs at `/api/docs` |
+| `mongo` | MongoDB 8, no published port (only the API reaches it); runs persist in a named volume |
+
+For frontend work, `cd frontend && pnpm install && pnpm dev` reads runs from the running stack through Vite's proxy.
 
 ## Quality gates
 

@@ -249,9 +249,16 @@ DECISIONS: list[dict[str, str]] = [
         "rejected": "Only announced shifts, which would flatter the model.",
     },
     {
-        "decision": "A static report, no live inference",
+        "decision": "A precomputed report, no live inference",
         "why": "Cheap on the shared CPU-only lab box, instant to load and reproducible.",
         "rejected": "A live playground: it needs a GPU for little added insight; revisit after the results.",
+    },
+    {
+        "decision": "Each rerun is published as a run in MongoDB, behind a small API; reports are never committed",
+        "why": "A rerun adds a run instead of overwriting one, so runs can be compared side by side and linked to; "
+        "a run is one JSON document read whole, which is the shape a document store is built for.",
+        "rejected": "Committing report.json (generated data in git, one result at a time) or a browser talking to the "
+        "database directly (it would need the database's credentials).",
     },
 ]
 

@@ -175,7 +175,7 @@ export function Limitations({ report }: { report: Report }) {
   );
 }
 
-export function Footer({ report, source }: { report: Report; source: string }) {
+export function Footer({ report, runId }: { report: Report; runId: string }) {
   const m = report.meta;
   return (
     <footer className="footer">
@@ -186,8 +186,8 @@ export function Footer({ report, source }: { report: Report; source: string }) {
         <dd>{m.kev_run}</dd>
         <dt>Note writer</dt>
         <dd>{m.note_writer}</dd>
-        <dt>Data file</dt>
-        <dd>{source}</dd>
+        <dt>Run</dt>
+        <dd>{runId}</dd>
       </dl>
       <dl>
         <dt>Seeds</dt>

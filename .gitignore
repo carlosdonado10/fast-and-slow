@@ -4,8 +4,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
-# study outputs (synced to Drive from Colab, not committed)
+# study outputs (synced to Drive from Colab, not committed); reports are published to the runs API
 runs/
+report.json
+frontend/public/data/
+.env
 # frontend
 node_modules/
 frontend/dist/
