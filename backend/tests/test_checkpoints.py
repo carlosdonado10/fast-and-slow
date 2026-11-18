@@ -51,3 +51,15 @@ def test_interrupted_ppo_continues_its_curve(tmp_path: Path, cfg: StudyConfig, b
     assert curve[-1]["score"] == 2.0 and model.num_timesteps >= 1_200
     assert [p["decisions"] for p in curve] == sorted(p["decisions"] for p in curve)
     assert curve[-1]["seconds"] >= first[-1]["seconds"]
+
+
+def test_micro_batches_give_the_same_update_as_one_pass(cfg: StudyConfig, bank: NoteBank) -> None:
+    """Gradient accumulation must not change the maths, only the memory."""
+    after = []
+    for micro in (cfg.kev.rl_minibatch, 1):
+        k = cfg.kev.model_copy(update={"rl_micro_batch": micro})
+        tr = KevRLTrainer(cfg.world, bank, 4, FakePolicy(seed=0), k, seed=0, train_seed_range=cfg.eval.eval_seed)
+        tr.update(tr.rollout())
+        after.append([p.detach().clone() for g in tr.policy.param_groups() for p in g["params"]])
+    for a, b in zip(*after, strict=True):
+        assert torch.allclose(a, b, atol=1e-5)

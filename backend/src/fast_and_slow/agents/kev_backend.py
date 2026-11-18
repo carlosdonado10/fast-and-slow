@@ -5,8 +5,12 @@ Built on Kev's own internals rather than its HTTP server, because RL needs gradi
 - DecisionModel.forward_batch returns differentiable pointer-head logits (temperature applied in eval mode);
 - the LoRA adapter is kept unmerged (LoadOptions(merge=False)) so its weights and the pointer head can be trained.
 
-The model stays in eval mode even while training: that keeps dropout off and the fitted temperature applied, so the
-log-probabilities used for PPO ratios are the same ones the agent acted on.
+The model stays in eval mode even while training: that keeps LoRA dropout off and the fitted temperature applied, so the
+log-probabilities used for PPO ratios are the same ones the agent acted on. Only the decoder layers are flagged as
+training, non-recursively, because transformers checkpoints activations only in a layer whose `training` is set; without
+it a backward pass keeps every activation of every request and runs out of memory.
+
+Inference is scored in chunks of `chunk` requests; gradient passes are sized by the caller (kev.rl_micro_batch).
 """
 
 from __future__ import annotations
@@ -21,11 +25,12 @@ from .policy import Request
 
 
 class KevPolicy:
-    def __init__(self, run: str, dtype: str = "bf16", device: str = "cuda"):
+    def __init__(self, run: str, dtype: str = "bf16", device: str = "cuda", chunk: int = 32):
         from kev.checkpoint import Checkpoint, LoadOptions
 
         self.name = run
         self.device = device
+        self.chunk = chunk
         ckpt = Checkpoint(run)
         torch_dtype = {"bf16": torch.bfloat16, "fp32": torch.float32}[dtype]
         self.tok, self.model = ckpt.load(device, LoadOptions(dtype=torch_dtype, merge=False))
@@ -38,7 +43,12 @@ class KevPolicy:
         for p in [*self.adapter, *self.head]:
             p.requires_grad_(True)
         if hasattr(self.model.lm, "gradient_checkpointing_enable"):
-            self.model.lm.gradient_checkpointing_enable()
+            self.model.lm.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            from transformers.modeling_layers import GradientCheckpointingLayer
+
+            for m in self.model.lm.modules():
+                if isinstance(m, GradientCheckpointingLayer):
+                    m.training = True  # this layer only (not .train(), which would recurse into LoRA dropout)
 
     def _record(self, req: Request) -> tuple[dict[str, Any], list[str]]:
         from kev.data import materialize
@@ -59,6 +69,8 @@ class KevPolicy:
         return rec, list(req["questions"])
 
     def score(self, requests: list[Request], grad: bool = False) -> list[dict[str, torch.Tensor]]:
+        if not grad and len(requests) > self.chunk:
+            return [z for i in range(0, len(requests), self.chunk) for z in self.score(requests[i : i + self.chunk])]
         recs = [self._record(r) for r in requests]
         encs = [self.model.encode(self.tok, rec) for rec, _ in recs]
         with torch.set_grad_enabled(grad):

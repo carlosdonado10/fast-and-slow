@@ -30,7 +30,8 @@ Out = typer.Option(Path("../frontend/public/data/report.json"), "--out", help="w
 
 
 def _study(profile: str, runs: Path) -> Study:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s")
+    logging.getLogger("fast_and_slow").setLevel(logging.INFO)  # our progress lines, not every library's HTTP requests
     cfg = load(profile)
     return Study(cfg, runs)
 
@@ -212,13 +213,26 @@ def kev_check(profile: str = Profile, runs: Path = Runs, batch: int = typer.Opti
     typer.echo("kev-check 3/4: timing the order question alone")
     order = timed(lambda: pol.score(order_only))
 
-    def step() -> None:
-        zs = pol.score(order_only, grad=True)
-        loss = torch.stack([-torch.log_softmax(z[ORDER_Q].float(), -1)[0] for z in zs]).mean()
-        loss.backward()  # type: ignore[no-untyped-call]
+    micro = s.cfg.kev.rl_micro_batch
 
-    typer.echo("kev-check 4/4: timing a training step and checking gradients reach the adapter")
+    def step() -> None:  # the trainer's pattern: forward/backward in micro-batches, gradients accumulate
+        for k in range(0, len(order_only), micro):
+            zs = pol.score(order_only[k : k + micro], grad=True)
+            loss = torch.stack([-torch.log_softmax(z[ORDER_Q].float(), -1)[0] for z in zs]).sum() / len(order_only)
+            loss.backward()  # type: ignore[no-untyped-call]
+
+    typer.echo(
+        f"kev-check 4/4: timing a training step ({micro} requests per pass) and checking gradients reach the adapter"
+    )
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     train = timed(step)
+    if torch.cuda.is_available():
+        peak, total = (
+            torch.cuda.max_memory_allocated() / 2**30,
+            torch.cuda.get_device_properties(0).total_memory / 2**30,
+        )
+        typer.echo(f"peak GPU memory in training: {peak:.1f} of {total:.0f} GB")
     grads = sum(p.grad is not None for g in pol.param_groups() for p in g["params"])
     if not grads:
         typer.echo("no gradient reached the trainable weights: RL cannot run")

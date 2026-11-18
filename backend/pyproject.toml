@@ -27,6 +27,9 @@ gpu = [
     "accelerate>=1.0",
     "peft>=0.21",
     "sentence-transformers>=3.0",
+    # Triton kernels for Qwen3.5's linear-attention layers: without them transformers falls back to a slow,
+    # memory-hungry PyTorch loop. 0.5.2 is the version Kev pins. Linux/CUDA only.
+    "flash-linear-attention==0.5.2; sys_platform == 'linux'",
 ]
 
 [project.scripts]

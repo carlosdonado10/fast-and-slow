@@ -136,24 +136,33 @@ class KevRLTrainer:
             order = self.rng.permutation(len(batch))
             for i in range(0, len(order), cfg.rl_minibatch):
                 mb = [batch[j] for j in order[i : i + cfg.rl_minibatch]]
-                logits = self.policy.score([s.req for s in mb], grad=True)
-                logp_all = torch.stack([torch.log_softmax(z[ORDER_Q].float(), -1) for z in logits])
-                act = torch.tensor([s.action for s in mb])
-                logp = logp_all.gather(1, act[:, None]).squeeze(1)
-                old = torch.tensor([s.old_logp for s in mb], dtype=logp.dtype, device=logp.device)
-                adv = torch.tensor([s.advantage for s in mb], dtype=logp.dtype, device=logp.device)
-                ratio = torch.exp(logp - old)
-                clipped = torch.clamp(ratio, 1 - cfg.rl_clip, 1 + cfg.rl_clip)
-                pg = -torch.min(ratio * adv, clipped * adv).mean()
-                entropy = -(logp_all.exp() * logp_all).sum(-1).mean()
-                loss = pg - cfg.rl_entropy * entropy
                 self.opt.zero_grad()
-                loss.backward()  # type: ignore[no-untyped-call]
+                # Gradient accumulation: each micro-batch's loss is its share of the minibatch mean, so the summed
+                # gradient equals one pass over the whole minibatch while only rl_micro_batch requests sit in memory.
+                loss_sum = ent_sum = clip_sum = 0.0
+                step = max(1, cfg.rl_micro_batch)
+                for k in range(0, len(mb), step):
+                    part = mb[k : k + step]
+                    logits = self.policy.score([s.req for s in part], grad=True)
+                    logp_all = torch.stack([torch.log_softmax(z[ORDER_Q].float(), -1) for z in logits])
+                    act = torch.tensor([s.action for s in part], device=logp_all.device)
+                    logp = logp_all.gather(1, act[:, None]).squeeze(1)
+                    old = torch.tensor([s.old_logp for s in part], dtype=logp.dtype, device=logp.device)
+                    adv = torch.tensor([s.advantage for s in part], dtype=logp.dtype, device=logp.device)
+                    ratio = torch.exp(logp - old)
+                    clipped = torch.clamp(ratio, 1 - cfg.rl_clip, 1 + cfg.rl_clip)
+                    pg = -torch.min(ratio * adv, clipped * adv).sum()
+                    entropy = -(logp_all.exp() * logp_all).sum()
+                    loss = (pg - cfg.rl_entropy * entropy) / len(mb)
+                    loss.backward()  # type: ignore[no-untyped-call]
+                    loss_sum += float(loss.detach())
+                    ent_sum += float(entropy.detach())
+                    clip_sum += float(((ratio.detach() - 1).abs() > cfg.rl_clip).float().sum())
                 torch.nn.utils.clip_grad_norm_(params, 1.0)
                 self.opt.step()
-                losses.append(float(loss.detach()))
-                ents.append(float(entropy.detach()))
-                clips.append(float(((ratio.detach() - 1).abs() > cfg.rl_clip).float().mean()))
+                losses.append(loss_sum)
+                ents.append(ent_sum / len(mb))
+                clips.append(clip_sum / len(mb))
         return {"loss": float(np.mean(losses)), "entropy": float(np.mean(ents)), "clip_frac": float(np.mean(clips))}
 
     # ------------------------------------------------------------ checkpoints

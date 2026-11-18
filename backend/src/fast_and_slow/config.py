@@ -70,6 +70,7 @@ class KevConfig(BaseModel):
     rl_groups_per_update: int = 4
     rl_epochs: int = 2
     rl_minibatch: int = 32
+    rl_micro_batch: int = 8  # requests per forward/backward pass; gradients accumulate up to rl_minibatch (GPU memory)
     rl_lr: float = 1e-5
     rl_head_lr: float = 1e-4
     rl_clip: float = 0.2
