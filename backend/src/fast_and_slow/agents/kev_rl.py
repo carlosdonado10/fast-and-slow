@@ -51,22 +51,35 @@ def _fsync(path: Path) -> None:
         os.fsync(f.fileno())
 
 
-def _is_complete(folder: Path) -> bool:
-    """trainer.json is written last and lists every other file with its size; all must be there at that size.
+def _problem(folder: Path) -> str | None:
+    """Why this checkpoint folder can't be resumed from, or None when it can.
+
+    trainer.json is written last and lists every other file with its size; all must be there at that size.
     Checkpoints from before the list existed are checked for their files being present and non-empty."""
     try:
         state = json.loads((folder / "trainer.json").read_text())
-    except (OSError, ValueError):
-        return False
-    files = state.get("files") if isinstance(state, dict) else None
-    if files is None:  # written before the file list existed: at least every file must be there and non-empty
-        weights = [f for f in (folder / "policy").glob("*") if f.is_file()]
-        needed = [*weights, folder / "optimizer.pt"]
-        return bool(weights) and all(f.exists() and f.stat().st_size > 0 for f in needed)
-    try:
-        return all((folder / name).stat().st_size == size for name, size in files.items())
     except OSError:
-        return False
+        return "trainer.json is missing"
+    except ValueError:
+        return "trainer.json is not valid JSON"
+    files = state.get("files") if isinstance(state, dict) else None
+    if files is None:
+        weights = [f for f in (folder / "policy").glob("*") if f.is_file()]
+        if not weights:
+            return "policy/ has no weights file"
+        files = {f.relative_to(folder).as_posix(): None for f in [*weights, folder / "optimizer.pt"]}
+    for name, size in files.items():
+        f = folder / name
+        if not f.exists():
+            return f"{name} is missing"
+        got = f.stat().st_size
+        if (size is None and got == 0) or (size is not None and got != size):
+            return f"{name} has {got:,} of {size if size is not None else 'some'} bytes"
+    return None
+
+
+def _is_complete(folder: Path) -> bool:
+    return _problem(folder) is None
 
 
 EvalFn = Callable[[DecisionPolicy], float]  # returns % of optimal on the held-out set
@@ -212,8 +225,9 @@ class KevRLTrainer:
         - the previous checkpoint is kept, and older ones deleted, so if the newest never fully reaches Drive the
           next session resumes from the one before (which had a whole save interval to upload)."""
         path.mkdir(parents=True, exist_ok=True)
-        folder = path / f"u{update:04d}"
-        shutil.rmtree(folder, ignore_errors=True)
+        # A name is never reused (update number + save time): on Drive, deleting a folder and creating one with the
+        # same name can leave two folders of that name, and the mount may show the stale one.
+        folder = path / f"u{update:04d}-{time.time_ns() // 1000:016d}"
         folder.mkdir()
         self.policy.save(folder / "policy")
         torch.save({"opt": self.opt.state_dict()}, folder / "optimizer.pt")
@@ -246,7 +260,8 @@ class KevRLTrainer:
 
     @staticmethod
     def _candidates(path: Path) -> list[Path]:
-        """Checkpoint folders, newest first: latest.json's, then every u*/ folder, then the pre-folder layout."""
+        """Checkpoint folders, newest first: latest.json's, then every u*/ folder (`u0012-<time>`, or `u0012` from
+        before names carried the time; both sort by update, then time), then the pre-folder layout."""
         out: list[Path] = []
         pointer = path / "latest.json"
         if pointer.exists():
@@ -266,9 +281,7 @@ class KevRLTrainer:
         candidates = self._candidates(path)
         complete = [f for f in candidates if _is_complete(f)]
         for bad in candidates[: candidates.index(complete[0])] if complete else candidates:
-            log_.warning(
-                "checkpoint %s is incomplete (files missing or partly uploaded on Drive); skipping it", bad.name
-            )
+            log_.warning("checkpoint %s is incomplete, skipping it: %s", bad.name, _problem(bad))
         errors = []
         for folder in complete:
             try:
