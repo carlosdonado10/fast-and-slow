@@ -77,7 +77,7 @@ class KevConfig(BaseModel):
     rl_entropy: float = 0.01
     rl_reward_scale: float = 0.01
     eval_every_updates: int = 6
-    checkpoint_every_updates: int = 3  # a few minutes of GPU time between checkpoints
+    checkpoint_every_updates: int = 2  # about 4 min on an A100 (15 on an L4); a pause always saves too
 
 
 class ClassicRLConfig(BaseModel):
