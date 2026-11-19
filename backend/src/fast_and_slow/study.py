@@ -28,6 +28,8 @@ from .agents.features import CachedEmbedder, Embedder, HashEmbedder
 from .agents.kev_agent import KevAgent, icl_context
 from .agents.kev_rl import KevRLTrainer
 from .agents.policy import DecisionPolicy, load_policy
+from .checkpoint_hub import ENV as HUB_ENV
+from .checkpoint_hub import HubMirror
 from .config import StudyConfig
 from .eval.metrics import pct_of_optimal
 from .eval.runner import EvalResult, Labeller, eval_scenarios, evaluate
@@ -187,6 +189,13 @@ class Study:
             return True
         w = self.cfg.world
         name = f"kev_rl H{h} seed{seed}"
+        mirror = HubMirror.from_env(f"{self.cfg.profile}/kev_rl/H{h}/seed{seed}")
+        if mirror is not None:
+            mirror.check()  # before any GPU time: a token that can't write fails here, not at the first save
+        elif not self.cfg.kev.fake:
+            log.warning(
+                "%s: checkpoints go only to %s (set %s to keep a confirmed copy on the Hub)", name, self.root, HUB_ENV
+            )
         log.info("%s: loading Kev and scoring the reference arms for the learning curve", name)
         policy = self.policy(fresh=True)  # every run starts from the released weights
         scorer = self.curve_scorer(h)
@@ -204,6 +213,7 @@ class Study:
             checkpoint=self.root / "checkpoints" / "kev_rl" / f"H{h}" / f"seed{seed}",
             deadline=time.monotonic() + max_minutes * 60 if max_minutes else None,
             label=name,
+            mirror=mirror,
         )
         if rl_log.paused:
             log.info(

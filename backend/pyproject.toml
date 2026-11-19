@@ -80,7 +80,7 @@ warn_return_any = false  # numpy's stubs return Any from most reductions; flaggi
 plugins = ["pydantic.mypy"]
 # libraries without type information, used only behind narrow adapters
 [[tool.mypy.overrides]]
-module = ["kev.*", "stable_baselines3.*", "gymnasium.*", "transformers.*", "sentence_transformers.*", "peft.*", "mongomock.*"]
+module = ["kev.*", "stable_baselines3.*", "gymnasium.*", "transformers.*", "sentence_transformers.*", "peft.*", "mongomock.*", "huggingface_hub.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

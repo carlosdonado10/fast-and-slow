@@ -16,7 +16,6 @@ The trainer is policy-agnostic: the same code trains Kev on a GPU and the fake p
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import shutil
@@ -24,6 +23,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 import torch
@@ -82,6 +82,11 @@ def _is_complete(folder: Path) -> bool:
     return _problem(folder) is None
 
 
+class Mirror(Protocol):
+    def push(self, folder: Path, keep: str | None) -> None: ...
+    def pull(self, dest: Path, is_complete: Callable[[Path], bool]) -> None: ...
+
+
 EvalFn = Callable[[DecisionPolicy], float]  # returns % of optimal on the held-out set
 
 
@@ -125,6 +130,7 @@ class KevRLTrainer:
         self.opt = torch.optim.AdamW(groups, weight_decay=0.0)
         self.decisions = 0
         self.seconds = 0.0
+        self.mirror: Mirror | None = None  # a second, confirmed copy of each checkpoint (see checkpoint_hub)
 
     # ------------------------------------------------------------ rollout
     def rollout(self) -> list[Step]:
@@ -245,9 +251,19 @@ class KevRLTrainer:
         }
         _write_synced(folder / "trainer.json", json.dumps(state))
         _write_synced(path / "latest.json", json.dumps({"folder": folder.name, "update": update}))
-        log_.info("checkpoint saved at update %s (%.0f MB to upload to Drive)", update, sum(files.values()) / 2**20)
+        log_.info("checkpoint saved at update %s (%.0f MB)", update, sum(files.values()) / 2**20)
 
         previous = [f for f in self._candidates(path) if f not in (folder, path) and _is_complete(f)][:1]
+        if self.mirror is not None:
+            try:
+                self.mirror.push(folder, keep=previous[0].name if previous else None)
+            except Exception as e:  # keep training; the next save tries again
+                log_.error(
+                    "checkpoint %s is NOT on the Hub (%s: %s); retrying at the next save",
+                    folder.name,
+                    type(e).__name__,
+                    e,
+                )
         for old in path.glob("u*"):
             if old.is_dir() and old != folder and old not in previous:
                 shutil.rmtree(old, ignore_errors=True)
@@ -261,14 +277,10 @@ class KevRLTrainer:
 
     @staticmethod
     def _candidates(path: Path) -> list[Path]:
-        """Checkpoint folders, newest first: latest.json's, then every u*/ folder (`u0012-<time>`, or `u0012` from
-        before names carried the time; both sort by update, then time), then the pre-folder layout."""
-        out: list[Path] = []
-        pointer = path / "latest.json"
-        if pointer.exists():
-            with contextlib.suppress(ValueError, KeyError, TypeError):
-                out.append(path / json.loads(pointer.read_text())["folder"])
-        out += sorted((f for f in path.glob("u*") if f.is_dir()), reverse=True)
+        """Checkpoint folders, newest first: every u*/ folder (`u0012-<time>`, or `u0012` from before names carried
+        the time; both sort by update, then time), then the pre-folder layout. latest.json is not trusted for the
+        order: on Drive it can be older than the folders, and the Hub copy may bring newer ones."""
+        out: list[Path] = sorted((f for f in path.glob("u*") if f.is_dir()), reverse=True)
         if (path / "trainer.json").exists():
             out.append(path)
         return list(dict.fromkeys(out))
@@ -279,6 +291,9 @@ class KevRLTrainer:
         return next((f for f in KevRLTrainer._candidates(path) if _is_complete(f)), None)
 
     def load_checkpoint(self, path: Path) -> tuple[int, RLLog] | None:
+        if self.mirror is not None:
+            path.mkdir(parents=True, exist_ok=True)
+            self.mirror.pull(path, _is_complete)
         candidates = self._candidates(path)
         complete = [f for f in candidates if _is_complete(f)]
         for bad in candidates[: candidates.index(complete[0])] if complete else candidates:
@@ -312,8 +327,11 @@ class KevRLTrainer:
         checkpoint: Path | None = None,
         deadline: float | None = None,
         label: str = "kev_rl",
+        mirror: Mirror | None = None,
     ) -> RLLog:
-        """deadline: a time.monotonic() value. When an update finishes past it, save a checkpoint and stop (paused)."""
+        """deadline: a time.monotonic() value. When an update finishes past it, save a checkpoint and stop (paused).
+        mirror: where each checkpoint is also pushed (and pulled from on resume), e.g. a HubMirror."""
+        self.mirror = mirror
         resumed = self.load_checkpoint(checkpoint) if checkpoint else None
         if resumed:
             start, log = resumed
