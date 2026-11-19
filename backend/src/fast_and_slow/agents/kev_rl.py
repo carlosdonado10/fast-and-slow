@@ -245,6 +245,7 @@ class KevRLTrainer:
         }
         _write_synced(folder / "trainer.json", json.dumps(state))
         _write_synced(path / "latest.json", json.dumps({"folder": folder.name, "update": update}))
+        log_.info("checkpoint saved at update %s (%.0f MB to upload to Drive)", update, sum(files.values()) / 2**20)
 
         previous = [f for f in self._candidates(path) if f not in (folder, path) and _is_complete(f)][:1]
         for old in path.glob("u*"):
